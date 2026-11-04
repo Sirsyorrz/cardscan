@@ -50,16 +50,40 @@ def _gray(small):
     return cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (5, 5), 0)
 
 
+def match_exposure(ref, cur):
+    """`ref` scaled per channel to `cur`'s exposure and white balance. The phone readjusts both when a card lands,
+    which otherwise shows up as the whole picture changing. Measured on the edges of the picture, which the pile
+    doesn't reach."""
+    r = ref.astype(np.float32) + 1
+    ratio = (cur.astype(np.float32) + 1) / r
+    h, w = ratio.shape[:2]
+    by, bx = h // 12, w // 12
+    ring = np.concatenate([ratio[:by].reshape(-1, 3), ratio[-by:].reshape(-1, 3),
+                           ratio[by:-by, :bx].reshape(-1, 3), ratio[by:-by, -bx:].reshape(-1, 3)])
+    gain = np.median(ring, axis=0)
+    return np.clip(r * gain - 1, 0, 255).astype(np.uint8)
+
+
 def changed(ref, cur):
     """Mask (WORK pixels) of what differs between two settled scenes, after undoing any small camera shift."""
     shift, _ = cv2.phaseCorrelate(_gray(ref).astype(np.float32), _gray(cur).astype(np.float32))
     m = np.float32([[1, 0, shift[0]], [0, 1, shift[1]]])
     ref = cv2.warpAffine(ref, m, (ref.shape[1], ref.shape[0]), borderMode=cv2.BORDER_REPLICATE)
+    ref = match_exposure(ref, cur)
     diff = cv2.absdiff(cv2.GaussianBlur(ref, (5, 5), 0), cv2.GaussianBlur(cur, (5, 5), 0)).max(axis=2)
     mask = (diff > CHANGE_DIFF).astype(np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     k = max(3, WORK // 60)
     return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+
+
+def largest_change(mask):
+    """Rotated rect of the biggest changed region whatever its shape (a card with a moved shadow attached), or None."""
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    big = max(contours, key=cv2.contourArea, default=None)
+    if big is None or cv2.contourArea(big) < 0.03 * mask.size:
+        return None
+    return cv2.minAreaRect(cv2.convexHull(big))
 
 
 def card_blob(mask):
@@ -233,16 +257,25 @@ class Watcher:
         blob = card_blob(mask)
         if blob is not None:
             (bx, by), (bw, bh), ba = blob
-            candidates.append((((bx * scale, by * scale), (bw * scale, bh * scale), ba), 1.3))
+            candidates.append((((bx * scale, by * scale), (bw * scale, bh * scale), ba), 1.3, True))
         if self.last_rect is not None:
-            candidates.append((self.last_rect, 1.5))
+            candidates.append((self.last_rect, 1.5, True))
+        elif blob is None and (region := largest_change(mask)) is not None:
+            # First card, but the change isn't card-shaped (a moved shadow attached): let the edge fitter look
+            # inside the changed region. Only a clean outline counts; a rough guess here would be the hand or the
+            # shadow, and the next cards would be searched for where it was.
+            (bx, by), (bw, bh), ba = region
+            candidates.append((((bx * scale, by * scale), (bw * scale, bh * scale), ba), 1.1, False))
         if not candidates:
             return Status(moving=False)
 
         self.tries += 1
         clean, unfit, rough = [], [], []
-        for rect, pad in candidates:
+        for rect, pad, rough_ok in candidates:
             quad, is_rough = refine(frame, rect, pad)
+            if not rough_ok and (is_rough or _changed_share(mask, quad, frame.shape[1]) < 0.6):
+                # a fallback outline that's mostly unchanged is the tray's pocket around the card, not the card
+                continue
             if not is_rough:
                 inner = inner_card(frame, quad, mask)
                 if inner is not None:

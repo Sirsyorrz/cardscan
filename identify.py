@@ -119,7 +119,8 @@ class Identifier:
         upside_down = None
         for top_end, bottom_start, zoom in PASSES:
             r = self._read(card, top_end, bottom_start, zoom, upside_down)
-            if r.id and upside_down is None:
+            # a low-confidence guess may come from the wrong way up; let the looser pass decide again
+            if r.id and r.confidence != "low" and upside_down is None:
                 upside_down = r.upside_down
             if r.id and (not best.id or RANK[r.confidence] > RANK[best.confidence]):
                 best = r

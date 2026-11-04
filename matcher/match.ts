@@ -94,9 +94,9 @@ function levenshtein(a: string, b: string, max: number) {
   return prev[b.length];
 }
 
-const PKM_NOISE = /\b(basic|stage\s*[12]|v?star|vmax|break|level\s*up|evolves\s+from.*|put\s+.*\s+on\s+the.*|trainer|item|supporter|stadium|tool|energy)\b/gi;
+const PKM_NOISE = /\b(basic|stage\s*[12]?|v?star|vmax|break|level\s*up|evolves\s+from.*|put\s+.*\s+on\s+the.*|trainer|item|supporter|stadium|tool|energy)\b/gi;
 // "Energy" is part of the name on energy cards ("Fire Energy", "Jet Energy") and some trainers ("Energy Switch")
-const PKM_NOISE_KEEP_ENERGY = /\b(basic|stage\s*[12]|v?star|vmax|break|level\s*up|evolves\s+from.*|put\s+.*\s+on\s+the.*|trainer|item|supporter|stadium|tool|special\s+energy)\b/gi;
+const PKM_NOISE_KEEP_ENERGY = /\b(basic|stage\s*[12]?|v?star|vmax|break|level\s*up|evolves\s+from.*|put\s+.*\s+on\s+the.*|trainer|item|supporter|stadium|tool|special\s+energy)\b/gi;
 // Stage and card-type labels; "リザードから進化" (evolves from Charmeleon) names another card.
 const PKJ_NOISE = /\S*から進化|たね|[12１２]\s*進化|進化|グッズ|サポート|スタジアム|ポケモンのどうぐ|トレーナーズ/g;
 
@@ -148,8 +148,9 @@ export function extractClues(lines: Line[], index: NameIndex, game: Game): Clues
   const clues: Clues = { body: [], names: [], numbers: [], setCodes: [] };
   // The card rarely fills the photo, so judge "bottom of the card" against the text block, not the image.
   const top = sorted[0]?.y ?? 0;
-  const bottom = Math.max(...sorted.map((l) => l.y + l.h), 0);
-  const relY = (l: Line) => (bottom > top ? (l.y - top) / (bottom - top) : 0);
+  // at least a third of the card tall, so a name strip read on its own keeps its lower lines as name candidates
+  const bottom = Math.max(...sorted.map((l) => l.y + l.h), top + 0.3);
+  const relY = (l: Line) => (l.y - top) / (bottom - top);
 
   for (const line of sorted) {
     const text = line.text.trim();
@@ -169,6 +170,12 @@ export function extractClues(lines: Line[], index: NameIndex, game: Game): Clues
     if (slash) {
       clues.numbers.push({ number: slash[1], total: slash[2] });
       if (/-P$/.test(slash[2])) clues.setCodes.push(slash[2]);
+      // the set code read glued to the number: "DLR091/103" (prefixed numbers carry the prefix on the total too)
+      const glued = /^([A-Z]{2,4})(\d+)$/.exec(slash[1]);
+      if (glued && /^\d+$/.test(slash[2])) {
+        clues.numbers.push({ number: glued[2], total: slash[2] });
+        clues.setCodes.push(glued[1]);
+      }
       // a symbol just before the number (regulation mark, rarity star) is often read as an extra digit: "9238/191"
       if (/^\d+$/.test(slash[1]) && slash[1].length > slash[2].length) {
         clues.numbers.push({ number: slash[1].slice(slash[1].length - slash[2].length), total: slash[2] });

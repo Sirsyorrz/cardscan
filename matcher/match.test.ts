@@ -45,6 +45,23 @@ test('pokemon: name with HP and number', async () => {
   assert.equal(m?.set_code, 'SSP');
 });
 
+test('pokemon: stage label whose digit the OCR dropped', async () => {
+  const m = await scan('pkm', lines(['STAGE Kilowattrel 120', 0.03], ['H DLR EN 041/103', 0.95]));
+  assert.equal(m?.name, 'Kilowattrel');
+  assert.equal(m?.set_code, 'DLR');
+});
+
+test('pokemon: trainer name under its label, name strip read on its own', async () => {
+  const m = await scan('pkm', lines(['Pokémon Tool TRAINER', 0.04], ['Custom Vest', 0.1]));
+  assert.equal(m?.name, 'Custom Vest');
+});
+
+test('pokemon: set code read glued to the number', async () => {
+  const m = await scan('pkm', lines(['Custom Vest', 0.05], ['Illus. Toyste Beach', 0.9], ['DLR091/103', 0.95]));
+  assert.equal(m?.number, '091');
+  assert.equal(m?.confidence, 'high');
+});
+
 test('pokemon: vintage number with total', async () => {
   const m = await scan('pkm', lines(['Charizard', 0.05], ['120 HP', 0.05], ['Fire Spin', 0.7], ['4/102', 0.95]));
   assert.equal(m?.name, 'Charizard');
