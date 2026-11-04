@@ -5,6 +5,7 @@ finish or status moves that one copy. Copies added by hand (the +/- buttons) liv
 """
 
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -15,8 +16,10 @@ sys.path.insert(0, str(HERE / "tools"))
 from build_db import norm  # noqa: E402
 
 CARDS_DB = HERE / "data" / "cards.db"
-COLLECTION_DB = HERE / "data" / "collection.db"
-CAPTURES = HERE / "captures"
+# CARDSCAN_COLLECTION points everything at another file, for testing without touching the real collection
+COLLECTION_DB = Path(os.environ.get("CARDSCAN_COLLECTION") or HERE / "data" / "collection.db")
+# a test collection keeps its captures beside it, so its session numbers can't land on the real ones
+CAPTURES = HERE / "captures" if not os.environ.get("CARDSCAN_COLLECTION") else COLLECTION_DB.parent / "captures"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (

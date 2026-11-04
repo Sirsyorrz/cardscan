@@ -2,12 +2,15 @@
 
     python review.py [--port 8765]
 
-Run it beside scan.py; the page refreshes as cards come in.
+Run it beside scan.py; the page refreshes as cards come in. The desktop app (app/) runs it in the background and
+uses the same JSON API, plus /live: the scanner's preview JPEG (scan.py --preview) as an MJPEG stream.
 """
 
 import argparse
 import json
+import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -19,6 +22,7 @@ from collection import norm
 PAGE = Path(__file__).resolve().parent / "static" / "review.html"
 CARD_COLS = "id, game, lang, name, local_name, set_code, set_name, number, rarity, image, released"
 _local = threading.local()
+LIVE = {"path": None}
 
 
 def db():
@@ -191,14 +195,52 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(data)
+
+    def do_OPTIONS(self):
+        # the app's page has its own origin, so JSON POSTs are preflighted
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def _live(self):
+        """Each new preview frame as one part of a multipart/x-mixed-replace stream, which an <img> plays."""
+        path = Path(LIVE["path"]) if LIVE["path"] else None
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        seen = None
+        try:
+            self.wfile.write(b"--frame\r\n")
+            while True:
+                try:
+                    stamp = path.stat().st_mtime_ns if path else None
+                except FileNotFoundError:
+                    stamp = None
+                if stamp and stamp != seen:
+                    seen = stamp
+                    data = path.read_bytes()
+                    # the closing boundary goes out with the frame, or browsers hold it until the next one
+                    self.wfile.write(b"Content-Type: image/jpeg\r\nContent-Length: " + str(len(data)).encode()
+                                     + b"\r\n\r\n" + data + b"\r\n--frame\r\n")
+                    self.wfile.flush()
+                time.sleep(0.04)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_GET(self):
         url = urlparse(self.path)
         try:
             if url.path == "/":
                 return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+            if url.path == "/live":
+                return self._live()
             if url.path.startswith("/capture/"):
                 return self._capture(int(url.path.rsplit("/", 1)[1]))
             handler = GET.get(url.path)
@@ -235,7 +277,20 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--live", help="the scanner's preview JPEG, served as /live")
+    ap.add_argument("--with-parent", action="store_true", help="exit when the process that started this one does")
     args = ap.parse_args()
+    LIVE["path"] = args.live
+    if args.with_parent:
+        parent = os.getppid()
+
+        def watch_parent():
+            # a killed or crashed app never gets to stop its server; reparenting means it's gone
+            while os.getppid() == parent:
+                time.sleep(2)
+            os._exit(0)
+
+        threading.Thread(target=watch_parent, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"http://localhost:{args.port}", flush=True)
     try:

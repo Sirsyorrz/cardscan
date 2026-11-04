@@ -4,6 +4,9 @@
     python scan.py /dev/video2 --show --foil        # start on foil; F in the window cycles normal / foil / holo
     python scan.py clip.mkv --no-db --out /tmp/caps   # replay a recording without touching the collection
 
+With --control (used by the desktop app) it reads commands from stdin ("mode foil", "quit") and reports on stdout
+as JSON lines; --preview writes the annotated feed to a JPEG a few times a second instead of opening a window.
+
 Every capture goes into data/collection.db (see collection.py) and its image into captures/<session>/, with
 sheet.jpg and session.json beside them. A capture that names the same card as the one before is a repeat (the card
 slid after landing), never a second copy.
@@ -14,6 +17,7 @@ import json
 import os
 import queue
 import shutil
+import sys
 import threading
 import time
 import traceback
@@ -71,6 +75,17 @@ def contact_sheet(entries, out, cols=8, width=200):
     cv2.imwrite(str(out / "sheet.jpg"), np.vstack(rows))
 
 
+def outlined(frame, held, quad):
+    """The feed at 960 wide with the card outline: green just after a capture, amber while one is being looked for."""
+    view = cv2.resize(frame, (960, round(frame.shape[0] * 960 / frame.shape[1])))
+    k = 960 / frame.shape[1]
+    if held:
+        cv2.polylines(view, [(held[0] * k).astype(np.int32)], True, (0, 255, 0), 3)
+    elif quad is not None:
+        cv2.polylines(view, [(quad * k).astype(np.int32)], True, (0, 200, 255), 2)
+    return view
+
+
 MODE_BOX = (250, 48)
 MODE_COLOUR = {"normal": (90, 90, 90), "foil": (200, 120, 0), "holo": (180, 0, 200)}
 
@@ -108,6 +123,7 @@ class Session:
         self.entries = []
         self.last = None
         self.latest = ""
+        self.report = None
         self.jobs = queue.Queue()
         self.identifier = Identifier()
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -140,6 +156,9 @@ class Session:
                 if self.db:
                     entry["scan_id"] = collection.add_scan(self.db, self.session_id, entry)
                 self.entries.append(entry)
+                if self.report:
+                    self.report({"event": "card", "status": "review", "n": n, "t": entry["t"], "scan_id": entry.get("scan_id"),
+                                 "name": None, "pending": self.jobs.qsize()})
 
     def _process(self, c, mode):
         r = self.identifier(c.card)
@@ -181,7 +200,15 @@ class Session:
             self.last = entry
         if status != "repeat":
             self.latest = f"{r.name or '?'} [{r.set_code} {r.number}]" if r.id else "? (review)"
-            print(f"{n:4d} {status:6s} {r.confidence or '':6s} {r.name or '?'}" + (f"  [{r.set_code} {r.number}]" if r.id else ""), flush=True)
+            if not self.report:
+                print(f"{n:4d} {status:6s} {r.confidence or '':6s} {r.name or '?'}" + (f"  [{r.set_code} {r.number}]" if r.id else ""), flush=True)
+        if self.report:
+            # repeats are reported too: a surer re-read can upgrade the entry shown before
+            shown = self.last if status == "repeat" and self.last else entry
+            self.report({"event": "card", "status": status, "entry_status": shown["status"], "repeat_of": self.last["n"] if status == "repeat" and self.last else None,
+                         **{k: shown.get(k) for k in ("n", "t", "scan_id", "name", "set_code", "set_name", "number",
+                                                      "confidence", "finish", "game")},
+                         "pending": self.jobs.qsize()})
 
 
 def main():
@@ -193,13 +220,25 @@ def main():
     ap.add_argument("--show", action="store_true", help="preview window with the detected outline")
     ap.add_argument("--size", default="1920x1080", help="camera resolution")
     ap.add_argument("--record", help="also save the raw feed to this .mkv, for replaying a session")
+    ap.add_argument("--mode", choices=list(collection.MODES), help="starting finish (overrides --foil)")
+    ap.add_argument("--control", action="store_true", help="JSON lines on stdout, commands on stdin (for the app)")
+    ap.add_argument("--preview", help="write the annotated feed to this JPEG a few times a second")
     args = ap.parse_args()
+
+    out_lock = threading.Lock()
+
+    def report(event):
+        if args.control:
+            with out_lock:
+                sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
+                sys.stdout.flush()
 
     cap = open_source(args.source, args.size)
     if not cap.isOpened():
+        report({"event": "error", "message": f"can't open {args.source}"})
         raise SystemExit(f"can't open {args.source}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    mode = "foil" if args.foil else "normal"
+    mode = args.mode or ("foil" if args.foil else "normal")
     db = session_id = None
     if args.no_db:
         if not args.out:
@@ -212,25 +251,47 @@ def main():
     out.mkdir(parents=True)
     watcher = Watcher()
     session = Session(out, fps, db, session_id)
-    toggle = {"mode": mode}
+    if args.control:
+        session.report = report
+    toggle = {"mode": mode, "quit": False}
     modes = list(collection.MODES)
 
+    def set_mode(m):
+        toggle["mode"] = m
+        if not args.control:
+            print(f"finish: {collection.MODES[m]}", flush=True)
+        report({"event": "mode", "mode": m})
+
     def next_mode():
-        toggle["mode"] = modes[(modes.index(toggle["mode"]) + 1) % len(modes)]
-        print(f"finish: {collection.MODES[toggle['mode']]}", flush=True)
+        set_mode(modes[(modes.index(toggle["mode"]) + 1) % len(modes)])
+
+    def read_commands():
+        for line in sys.stdin:
+            cmd, _, arg = line.strip().partition(" ")
+            if cmd == "mode" and arg in collection.MODES:
+                set_mode(arg)
+            elif cmd == "quit":
+                break
+        # stdin closing (the app went away) stops the scan too
+        toggle["quit"] = True
+
+    if args.control:
+        threading.Thread(target=read_commands, daemon=True).start()
 
     def on_mouse(event, x, y, _flags, _param):
         if event == cv2.EVENT_LBUTTONDOWN and x >= 960 - MODE_BOX[0] and y <= MODE_BOX[1]:
             next_mode()
 
-    if session_id:
+    if session_id and not args.control:
         print(f"session {session_id}, captures in {out}", flush=True)
+    report({"event": "started", "session": session_id, "dir": str(out), "mode": mode})
     started = time.perf_counter()
+    last_preview = 0.0
     held = None
     recorder = None
     mouse_set = False
     try:
-        while True:
+        while not toggle["quit"]:
             ok, frame = cap.read()
             if not ok:
                 break
@@ -243,13 +304,15 @@ def main():
             if status.capture:
                 session.add(status.capture, toggle["mode"])
                 held = (status.capture.quad, watcher.frame_no + round(fps * 0.7))
+            now = time.perf_counter()
+            if args.preview and now - last_preview > 0.12:
+                last_preview = now
+                view = outlined(frame, held if held and watcher.frame_no <= held[1] else None, status.quad)
+                tmp = args.preview + ".tmp.jpg"
+                cv2.imwrite(tmp, view, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                os.replace(tmp, args.preview)
             if args.show:
-                view = cv2.resize(frame, (960, round(frame.shape[0] * 960 / frame.shape[1])))
-                k = 960 / frame.shape[1]
-                if held and watcher.frame_no <= held[1]:
-                    cv2.polylines(view, [(held[0] * k).astype(np.int32)], True, (0, 255, 0), 3)
-                elif status.quad is not None:
-                    cv2.polylines(view, [(status.quad * k).astype(np.int32)], True, (0, 200, 255), 2)
+                view = outlined(frame, held if held and watcher.frame_no <= held[1] else None, status.quad)
                 added = sum(e["status"] == "added" for e in session.entries)
                 cv2.putText(view, f"{added} cards  {session.latest}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 5)
                 cv2.putText(view, f"{added} cards  {session.latest}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
@@ -269,6 +332,9 @@ def main():
         recorder.release()
     session.close()
     counts = {s: sum(e["status"] == s for e in session.entries) for s in ("added", "review", "repeat")}
+    report({"event": "done", **counts, "session": session_id})
+    if args.control:
+        return
     print(f"{counts['added']} added, {counts['review']} to review, {counts['repeat']} repeats"
           f" ({watcher.frame_no + 1} frames in {time.perf_counter() - started:.1f}s)")
 
