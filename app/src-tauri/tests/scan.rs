@@ -15,7 +15,7 @@ fn replay_reports_cards_and_takes_commands() {
     std::env::set_var("CARDSCAN_COLLECTION", &db);
 
     let (tx, rx) = mpsc::channel::<serde_json::Value>();
-    let opts = ScanOptions { source: video, mode: "normal".into(), record: None };
+    let opts = ScanOptions { source: video, mode: "normal".into() };
     let mut scan = Scan::start(
         &cardscan::root(),
         &opts,

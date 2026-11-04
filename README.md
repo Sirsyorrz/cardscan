@@ -27,14 +27,13 @@ The matcher needs Node 22.18+ (it runs the TypeScript directly). `npm install` o
 `app/` is a desktop window over the scripts below (Tauri + React, this PC only: it runs the Python in this
 folder's `.venv`). Scan has the camera picker, Start/Stop, the finish toggle (Normal, Foil / Reverse, Holo, switchable
 mid-run) and the live feed with the cards identified so far. Review and Collection are the pages review.py served,
-and Settings has recording, price refresh and the card data rebuild.
+and Settings has the price refresh and the card data rebuild.
 
 ```fish
 cd ~/Documents/GitHub/cardscan/app; npm install; ./run.sh    # builds and starts it
 ```
 
-After a build it's also in the app menu as CardScan (`~/.local/share/applications/cardscan.desktop`). The scripts
-still work on their own:
+The scripts still work on their own:
 
 ## Use
 

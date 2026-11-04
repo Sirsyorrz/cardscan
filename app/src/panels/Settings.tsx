@@ -3,8 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../state";
 
 export default function Settings({ onClose }: { onClose: () => void }) {
-  const prefs = useStore((s) => s.prefs);
-  const setPrefs = useStore((s) => s.setPrefs);
   const say = useStore((s) => s.say);
   const [root, setRoot] = useState("");
 
@@ -28,18 +26,6 @@ export default function Settings({ onClose }: { onClose: () => void }) {
   return (
     <div className="modal-back" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="sidebar-h">Scanning</div>
-        <div className="setrow">
-          <div>
-            Record scans
-            <div className="dim">
-              Save the camera feed of each scan to recordings/ so it can be replayed later (about 2 GB an hour).
-            </div>
-          </div>
-          <button className={prefs.record ? "on" : ""} onClick={() => setPrefs({ record: !prefs.record })}>
-            {prefs.record ? "On" : "Off"}
-          </button>
-        </div>
         <div className="sidebar-h">Data</div>
         <div className="setrow">
           <div>

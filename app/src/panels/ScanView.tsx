@@ -15,14 +15,13 @@ export default function ScanView() {
   const liveSession = useStore((s) => s.liveSession);
   const say = useStore((s) => s.say);
   const [cameras, setCameras] = useState<Camera[]>([]);
-  const [files, setFiles] = useState<string[]>([]);
   // a new <img> per run, so the stream reconnects instead of showing the last run's final frame
   const [feed, setFeed] = useState(0);
 
   const refreshCameras = () =>
     invoke<Camera[]>("cameras").then((list) => {
       setCameras(list);
-      const known = list.some((c) => c.path === prefs.source) || files.includes(prefs.source);
+      const known = list.some((c) => c.path === prefs.source);
       if (!known && list.length) {
         // the phone's webcam mode, when it's plugged in, is what you want nearly every time
         const phone = list.find((c) => /pixel|android/i.test(c.name)) ?? list[0];
@@ -37,14 +36,10 @@ export default function ScanView() {
   const start = async () => {
     if (!prefs.source) return say("Pick a camera first");
     try {
-      const rec = await invoke<string | null>("scan_start", {
-        source: prefs.source,
-        mode: prefs.mode,
-        record: prefs.record,
-      });
+      await invoke("scan_start", { source: prefs.source, mode: prefs.mode });
       useStore.setState({ scanning: true, stopping: false, live: [], pending: 0 });
       setFeed((f) => f + 1);
-      say(rec ? `Starting the scanner, recording to ${rec}` : "Starting the scanner");
+      say("Starting the scanner");
     } catch (e) {
       say(String(e));
     }
@@ -61,13 +56,6 @@ export default function ScanView() {
     if (scanning) invoke("scan_mode", { mode });
   };
 
-  const openFile = async () => {
-    const path = await invoke<string | null>("pick_recording");
-    if (!path) return;
-    setFiles((f) => (f.includes(path) ? f : [...f, path]));
-    setPrefs({ source: path });
-  };
-
   const added = live.filter((c) => c.status === "added").length;
   const review = live.filter((c) => c.status === "review").length;
   const repeats = live.reduce((n, c) => n + c.repeats, 0);
@@ -81,21 +69,13 @@ export default function ScanView() {
           onChange={(e) => setPrefs({ source: e.target.value })}
           onFocus={refreshCameras}
         >
-          {!cameras.length && !files.length && <option value="">No camera found</option>}
+          {!cameras.length && <option value="">No camera found</option>}
           {cameras.map((c) => (
             <option key={c.path} value={c.path}>
               {c.name} ({c.path})
             </option>
           ))}
-          {files.map((f) => (
-            <option key={f} value={f}>
-              Recording: {f.split(/[\\/]/).pop()}
-            </option>
-          ))}
         </select>
-        <button disabled={scanning} onClick={openFile}>
-          Open recording
-        </button>
         {scanning ? (
           <button className="danger" disabled={stopping} onClick={stop}>
             {stopping ? "Finishing" : "Stop"}

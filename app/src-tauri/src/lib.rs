@@ -100,7 +100,6 @@ pub fn cameras() -> Vec<Camera> {
 pub struct ScanOptions {
     pub source: String,
     pub mode: String,
-    pub record: Option<String>,
 }
 
 /// A running scan.py. Commands go in on stdin; `on_line` gets each stdout line (JSON events) and
@@ -120,11 +119,7 @@ impl Scan {
         let live = live_path();
         let _ = std::fs::remove_file(&live);
         let live = live.to_string_lossy().to_string();
-        let mut args =
-            vec!["scan.py", &opts.source, "--control", "--preview", &live, "--mode", &opts.mode];
-        if let Some(r) = &opts.record {
-            args.extend(["--record", r]);
-        }
+        let args = ["scan.py", &opts.source, "--control", "--preview", &live, "--mode", &opts.mode];
         let mut child = py(root, &args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

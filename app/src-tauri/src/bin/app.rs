@@ -7,7 +7,6 @@ use std::time::Duration;
 use cardscan::{Camera, Scan, ScanOptions, Server};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_dialog::DialogExt;
 
 struct App {
     root: PathBuf,
@@ -79,24 +78,12 @@ fn scan_start(
     state: State<'_, App>,
     source: String,
     mode: String,
-    record: bool,
-) -> Result<Option<String>, String> {
+) -> Result<(), String> {
     let mut slot = state.scan.lock().unwrap();
     if slot.is_some() {
         return Err("a scan is already running".into());
     }
-    let record = record
-        .then(|| {
-            let dir = state.root.join("recordings");
-            std::fs::create_dir_all(&dir).ok()?;
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            Some(dir.join(format!("scan-{stamp}.mkv")).to_string_lossy().to_string())
-        })
-        .flatten();
-    let opts = ScanOptions { source, mode, record: record.clone() };
+    let opts = ScanOptions { source, mode };
     let (out, err) = (app.clone(), app.clone());
     let scan = Scan::start(
         &state.root,
@@ -130,7 +117,7 @@ fn scan_start(
         let _ = app.emit("scan:exit", ExitEvent { code });
         return;
     });
-    Ok(record)
+    Ok(())
 }
 
 #[tauri::command]
@@ -145,20 +132,6 @@ fn scan_stop(state: State<'_, App>) {
     if let Some(s) = state.scan.lock().unwrap().as_mut() {
         s.stop();
     }
-}
-
-#[tauri::command]
-async fn pick_recording(app: AppHandle) -> Option<String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.dialog().file().add_filter("Video", &["mkv", "mp4", "avi", "mov"]).pick_file(move |p| {
-        let _ = tx.send(p);
-    });
-    tauri::async_runtime::spawn_blocking(move || rx.recv().ok().flatten())
-        .await
-        .ok()
-        .flatten()
-        .and_then(|p| p.into_path().ok())
-        .map(|p| p.to_string_lossy().to_string())
 }
 
 #[derive(Serialize, Clone)]
@@ -211,7 +184,6 @@ fn main() {
     }
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.manage(App {
                 root: cardscan::root(),
@@ -230,7 +202,6 @@ fn main() {
             scan_start,
             scan_mode,
             scan_stop,
-            pick_recording,
             job_run
         ])
         .build(tauri::generate_context!())
