@@ -1,0 +1,5 @@
+numba==0.68.1
+numpy==2.5.4
+onnxruntime-gpu[cuda,cudnn]==1.31.1
+opencv-python==5.0.0.93
+rapidocr==3.10.0
