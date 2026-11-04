@@ -1,7 +1,7 @@
 """Watch a video file or camera device, identify each card dropped and add it to the collection.
 
     python scan.py /dev/video2 --show
-    python scan.py /dev/video2 --show --foil        # a batch of foils
+    python scan.py /dev/video2 --show --foil        # start on foil; F in the window cycles normal / foil / holo
     python scan.py clip.mkv --no-db --out /tmp/caps   # replay a recording without touching the collection
 
 Every capture goes into data/collection.db (see collection.py) and its image into captures/<session>/, with
@@ -71,6 +71,18 @@ def contact_sheet(entries, out, cols=8, width=200):
     cv2.imwrite(str(out / "sheet.jpg"), np.vstack(rows))
 
 
+MODE_BOX = (250, 48)
+MODE_COLOUR = {"normal": (90, 90, 90), "foil": (200, 120, 0), "holo": (180, 0, 200)}
+
+
+def draw_mode(view, mode):
+    """The finish toggle, top right; F or a click on it switches."""
+    w, h = MODE_BOX
+    x = view.shape[1] - w
+    cv2.rectangle(view, (x, 0), (view.shape[1], h), MODE_COLOUR[mode], -1)
+    cv2.putText(view, f"{collection.MODES[mode]} [F]", (x + 10, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+
+
 def recrop(c):
     """The card inside a rough capture's region, at the frame's full resolution. A rough region can cover the
     whole tray floor when the change mask spreads (a shadow, a nudged tray), leaving the card small in the warp."""
@@ -88,12 +100,11 @@ def recrop(c):
 class Session:
     """Identifies captures on a worker thread, in order, so the camera loop never waits on OCR."""
 
-    def __init__(self, out, fps, db=None, session_id=None, mode="normal"):
+    def __init__(self, out, fps, db=None, session_id=None):
         self.out = out
         self.fps = fps
         self.db = db
         self.session_id = session_id
-        self.mode = mode
         self.entries = []
         self.last = None
         self.latest = ""
@@ -102,8 +113,9 @@ class Session:
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
-    def add(self, capture):
-        self.jobs.put(capture)
+    def add(self, capture, mode):
+        """`mode`: the finish toggle as the card landed, not when its turn in the queue comes."""
+        self.jobs.put((capture, mode))
 
     def close(self):
         self.jobs.put(None)
@@ -113,9 +125,10 @@ class Session:
         contact_sheet(self.entries, self.out)
 
     def _run(self):
-        while (c := self.jobs.get()) is not None:
+        while (job := self.jobs.get()) is not None:
+            c, mode = job
             try:
-                self._process(c)
+                self._process(c, mode)
             except Exception:
                 # one bad capture must not stop the session; keep its image so it can be reviewed
                 traceback.print_exc()
@@ -128,7 +141,7 @@ class Session:
                     entry["scan_id"] = collection.add_scan(self.db, self.session_id, entry)
                 self.entries.append(entry)
 
-    def _process(self, c):
+    def _process(self, c, mode):
         r = self.identifier(c.card)
         if not r.id and c.frame is not None:
             found = recrop(c)
@@ -141,7 +154,7 @@ class Session:
         cv2.imwrite(str(self.out / file), upright(c.card, r))
         entry = {"n": n, "t": round(c.frame_no / self.fps, 1), "file": file, "rough": c.rough, **asdict(r)}
         del entry["upside_down"]
-        entry["finish"] = collection.pick_finish(self.db, r.id, self.mode) if self.db and r.id else None
+        entry["finish"] = collection.pick_finish(self.db, r.id, mode) if self.db and r.id else None
         # The same name twice in a row is the same card read again (it slid after landing); a second copy is
         # never dropped straight after the first. The surer read decides the printing.
         prev = self.last
@@ -175,7 +188,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("source", help="video file, /dev/videoN or camera index")
     ap.add_argument("--out", help="where captures go (default captures/<session>)")
-    ap.add_argument("--foil", action="store_true", help="every card in this run is foil (reverse holo for Pokémon)")
+    ap.add_argument("--foil", action="store_true", help="start with the finish toggle on foil / reverse holo")
     ap.add_argument("--no-db", action="store_true", help="don't record anything in the collection")
     ap.add_argument("--show", action="store_true", help="preview window with the detected outline")
     ap.add_argument("--size", default="1920x1080", help="camera resolution")
@@ -198,12 +211,24 @@ def main():
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     watcher = Watcher()
-    session = Session(out, fps, db, session_id, mode)
+    session = Session(out, fps, db, session_id)
+    toggle = {"mode": mode}
+    modes = list(collection.MODES)
+
+    def next_mode():
+        toggle["mode"] = modes[(modes.index(toggle["mode"]) + 1) % len(modes)]
+        print(f"finish: {collection.MODES[toggle['mode']]}", flush=True)
+
+    def on_mouse(event, x, y, _flags, _param):
+        if event == cv2.EVENT_LBUTTONDOWN and x >= 960 - MODE_BOX[0] and y <= MODE_BOX[1]:
+            next_mode()
+
     if session_id:
         print(f"session {session_id}, captures in {out}", flush=True)
     started = time.perf_counter()
     held = None
     recorder = None
+    mouse_set = False
     try:
         while True:
             ok, frame = cap.read()
@@ -216,7 +241,7 @@ def main():
                 recorder.write(frame)
             status = watcher.feed(frame)
             if status.capture:
-                session.add(status.capture)
+                session.add(status.capture, toggle["mode"])
                 held = (status.capture.quad, watcher.frame_no + round(fps * 0.7))
             if args.show:
                 view = cv2.resize(frame, (960, round(frame.shape[0] * 960 / frame.shape[1])))
@@ -228,9 +253,16 @@ def main():
                 added = sum(e["status"] == "added" for e in session.entries)
                 cv2.putText(view, f"{added} cards  {session.latest}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 5)
                 cv2.putText(view, f"{added} cards  {session.latest}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                draw_mode(view, toggle["mode"])
                 cv2.imshow("pcscan", view)
-                if cv2.waitKey(1) & 0xFF in (27, ord("q")):
+                if not mouse_set:
+                    cv2.setMouseCallback("pcscan", on_mouse)
+                    mouse_set = True
+                key = cv2.waitKey(1) & 0xFF
+                if key in (27, ord("q")):
                     break
+                if key == ord("f"):
+                    next_mode()
     except KeyboardInterrupt:
         pass
     if recorder is not None:

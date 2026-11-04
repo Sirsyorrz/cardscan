@@ -65,10 +65,11 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 # Finish keys: Magic uses Scryfall's nonfoil/foil/etched; Pokemon keys start with normal/holo/reverse and append
 # what makes the print distinct ("reverse:pokeball"), with labels in the cards.db variants table.
-MODES = ("normal", "foil")
+# What the scanner's finish toggle can say about the pile; Magic has no holo/reverse split, so both mean foil.
+MODES = {"normal": "Normal", "foil": "Foil / Reverse", "holo": "Holo"}
 PREFER = {
-    "mtg": {"normal": ["nonfoil"], "foil": ["foil", "etched"]},
-    "pkm": {"normal": ["normal", "holo"], "foil": ["reverse", "holo"]},
+    "mtg": {"normal": ["nonfoil"], "foil": ["foil", "etched"], "holo": ["foil", "etched"]},
+    "pkm": {"normal": ["normal", "holo"], "foil": ["reverse", "holo"], "holo": ["holo", "reverse"]},
 }
 LABELS = {"nonfoil": "Normal", "foil": "Foil", "etched": "Etched foil", "normal": "Normal", "holo": "Holo",
           "reverse": "Reverse holo"}
@@ -78,8 +79,9 @@ def now():
     return int(time.time() * 1000)
 
 
-def connect(path=COLLECTION_DB):
+def connect(path=None):
     """The collection with cards.db attached as `c`."""
+    path = Path(path or COLLECTION_DB)
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(f"file:{path}", uri=True, timeout=10, check_same_thread=False)
     db.row_factory = sqlite3.Row

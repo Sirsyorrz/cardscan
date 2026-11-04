@@ -29,10 +29,14 @@ up as "Pixel 9 Pro XL: Android Webcam" (`/dev/video2` here; `cat /sys/class/vide
 
 ```fish
 .venv/bin/python scan.py /dev/video2 --show            # q or Esc to stop
-.venv/bin/python scan.py /dev/video2 --show --foil     # a pile of foils (reverse holos for Pokémon)
+.venv/bin/python scan.py /dev/video2 --show --foil     # start with the finish toggle on foil
 .venv/bin/python review.py                             # http://localhost:8765, alongside or afterwards
 .venv/bin/python prices.py                             # refresh prices of everything owned
 ```
+
+The window's top-right button (or F) sets the finish of the cards you drop next: Normal, Foil / Reverse (Magic
+foil, Pokémon reverse holo) or Holo (Pokémon holo; Magic foil). A card gets the setting from when it landed. When
+a card doesn't come in that finish, it gets the nearest one it does.
 
 Each run is a session: its captures (straightened, upright) go to `captures/<session>/` with a labelled
 `sheet.jpg`, and every capture is recorded in `data/collection.db` with a status:
