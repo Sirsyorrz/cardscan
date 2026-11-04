@@ -47,6 +47,8 @@ export type Match = {
   candidates?: string[];
   /** Matched from the collector number alone; `name` is just the first candidate's. */
   nameUnread?: boolean;
+  /** The collector number was read and agrees: the printing is settled, whatever the name confidence. */
+  byNumber?: boolean;
 };
 
 export const MAX_CANDIDATES = 80;
@@ -233,8 +235,8 @@ export async function resolveCard(clues: Clues, query: Query, game: Game): Promi
         [code, n.number, n.number, ...scope.params],
       );
       const named = rows.find((r) => clues.names.some((c) => c.name === r.name));
-      if (named) return { ...named, confidence: 'high' };
-      if (rows.length === 1 && !clues.names.length) return { ...rows[0], confidence: 'medium' };
+      if (named) return { ...named, confidence: 'high', byNumber: true };
+      if (rows.length === 1 && !clues.names.length) return { ...rows[0], confidence: 'medium', byNumber: true };
     }
   }
 
@@ -265,7 +267,7 @@ export async function resolveCard(clues: Clues, query: Query, game: Game): Promi
     const hits = printings.filter((p) => stripZeros(p.number) === n.number);
     const withTotal = n.total ? hits.filter((p) => !p.printed_total || stripZeros(p.printed_total) === stripZeros(n.total!)) : hits;
     const pick = (withTotal.length ? withTotal : hits).find((p) => !codes.length || inReadSet(p)) ?? (withTotal[0] ?? hits[0]);
-    if (pick) return { ...pick, confidence: best.exact ? 'high' : 'medium' };
+    if (pick) return { ...pick, confidence: best.exact ? 'high' : 'medium', byNumber: true };
   }
 
   if (codes.length) {

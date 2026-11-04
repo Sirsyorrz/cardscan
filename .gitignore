@@ -2,7 +2,6 @@ node_modules/
 .venv/
 __pycache__/
 captures/
-data/cards.db
-data/cards.tmp
+data/
 tools/cache/
 *.mkv

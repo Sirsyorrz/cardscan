@@ -29,18 +29,31 @@ up as "Pixel 9 Pro XL: Android Webcam" (`/dev/video2` here; `cat /sys/class/vide
 
 ```fish
 .venv/bin/python scan.py /dev/video2 --show            # q or Esc to stop
-.venv/bin/python scan.py clip.mkv --out /tmp/caps       # replay a recording
-.venv/bin/python scan.py /dev/video2 --show --record /tmp/session.mkv
+.venv/bin/python scan.py /dev/video2 --show --foil     # a pile of foils (reverse holos for Pokémon)
+.venv/bin/python review.py                             # http://localhost:8765, alongside or afterwards
+.venv/bin/python prices.py                             # refresh prices of everything owned
 ```
 
-`--out` (default `captures/`) gets each card straightened and upright, `sheet.jpg` with every capture labelled, and
-`session.json`: one entry per capture with the match and a status:
+Each run is a session: its captures (straightened, upright) go to `captures/<session>/` with a labelled
+`sheet.jpg`, and every capture is recorded in `data/collection.db` with a status:
 
-- `added`: identified (`confidence` high: name plus set code or number agree; medium: one of them fuzzy or missing)
-- `review`: no match, a low-confidence guess, or a capture that wasn't a clean card outline (a card stuck on its edge)
-  unless it still matched with high confidence
+- `added`: identified and counted in the collection (`confidence` high: name plus set code or number agree;
+  medium: one of them fuzzy or missing, or the printing chosen from the artwork)
+- `review`: no match, a low-confidence guess, or a capture that wasn't a clean card outline (a card stuck on its
+  edge) unless it still matched with high confidence. Not counted until confirmed.
 - `repeat`: the same name as the card before, i.e. the same card read again after it slid. A second copy is never
   dropped straight after the first; add extra copies by hand. The surer of the two reads keeps the printing.
+- `rejected`: marked "not a card" on the review page.
+
+The review page shows a session's captures next to the matched card. Pick another printing or search for the right
+card, set finish and condition, mark it not a card, or add more copies (keys: J/K to move, Enter to add, X to
+reject, / to search). New captures appear while a scan is running. The Collection tab lists what you own with
+prices in AUD, +/- per row, and a price refresh.
+
+Recording a session (`--record /tmp/session.mkv`) makes it replayable for tuning without touching the collection:
+`scan.py /tmp/session.mkv --no-db --out /tmp/caps`.
+
+The collection is only in `data/collection.db` (not in git); back it up.
 
 ## How it works
 
@@ -51,6 +64,13 @@ up as "Pixel 9 Pro XL: Android Webcam" (`/dev/video2` here; `cat /sys/class/vide
   looser crop is tried. A rough capture that matches nothing gets searched again for the card at full resolution.
 - `matcher/matcher.ts` is a long-running Node process that resolves the OCR lines with `matcher/match.ts` against
   `data/cards.db`: name (fuzzy), set code and collector number, for Magic, Pokémon and Japanese Pokémon.
+- `art.py`: when the name and set were read but the collector number wasn't, the capture is compared with the
+  official image of each printing in that set (showcase, borderless and so on); images are cached in `data/images/`.
+- `collection.py` keeps the collection: owned copies by card, finish and condition, plus every session and capture.
+  Changing a capture's card or status moves its copy.
+- `tools/build_db.py` builds `data/cards.db`. Pokémon sets TCGplayer lists before TCGdex has them (new releases)
+  come from TCGplayer's product data alone (ids `tcg-<productId>`, no artist or legality, images once TCGplayer has
+  them); when a later build has the real cards, owned copies move over by product id.
 
 ## Camera
 

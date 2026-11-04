@@ -5,6 +5,7 @@ for matching and costs time. The top strip is read both ways up, and whichever w
 """
 
 import json
+import sqlite3
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,8 @@ onnxruntime.preload_dlls()
 # "no registered plugin EP device" on every session, though CUDA is in use
 onnxruntime.set_default_logger_severity(3)
 from rapidocr import RapidOCR  # noqa: E402  (needs the CUDA libraries preloaded)
+
+import art  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 # (name strip end, collector strip start, collector strip zoom). The tight crop reads most cards; when it isn't sure,
@@ -37,6 +40,10 @@ class Result:
     game: str | None = None
     upside_down: bool = False
     candidates: list | None = None
+    by_number: bool = False
+    # the printing was chosen by comparing artwork; `art_sure` when it won clearly
+    by_art: bool = False
+    art_sure: bool = False
 
 
 def _lines(ocr, img, y0, y1, scale=1, join=False):
@@ -86,6 +93,8 @@ def _join_rows(lines):
 class Identifier:
     def __init__(self, games=("mtg", "pkm", "pkj")):
         self.games = list(games)
+        self.cards = sqlite3.connect(f"file:{HERE / 'data' / 'cards.db'}?mode=ro", uri=True, check_same_thread=False)
+        self.cards.row_factory = sqlite3.Row
         self.ocr = RapidOCR(params={
             "Global.log_level": "error",
             "Global.use_cls": False,
@@ -116,7 +125,27 @@ class Identifier:
                 best = r
             if best.confidence == "high":
                 break
+        if best.id and not best.by_number:
+            self._by_art(card, best)
         return best
+
+    def _by_art(self, card, r):
+        """Settle the printing from the artwork when the collector number didn't. Only printings of the matched name
+        in the matched set, unless the name has few printings overall."""
+        cur = self.cards.execute("SELECT game, lang FROM cards WHERE id = ?", (r.id,)).fetchone()
+        rows = self.cards.execute("SELECT id, game, image, set_code, set_name, number FROM cards WHERE name = ? AND game = ? AND lang = ?",
+                                  (r.name, cur["game"], cur["lang"])).fetchall()
+        if len(rows) > art.MAX_CANDIDATES:
+            rows = [x for x in rows if x["set_code"] == r.set_code]
+        if not 2 <= len(rows) <= art.MAX_CANDIDATES:
+            return
+        chosen, sure = art.pick(upright(card, r), rows)
+        if chosen is None:
+            return
+        r.id, r.set_code, r.set_name, r.number = chosen["id"], chosen["set_code"], chosen["set_name"], chosen["number"]
+        r.by_art, r.art_sure = True, sure
+        if sure and r.confidence == "low":
+            r.confidence = "medium"
 
     def _read(self, card, top_end, bottom_start, zoom, upside_down):
         flipped = card[::-1, ::-1]
@@ -139,7 +168,7 @@ class Identifier:
         return Result(
             id=m["id"], name=m["name"], set_code=m["set_code"], set_name=reply["card"]["set_name"],
             number=m["number"], confidence=m["confidence"], game=reply["game"], upside_down=upside_down,
-            candidates=m.get("candidates"),
+            candidates=m.get("candidates"), by_number=bool(m.get("byNumber")),
         )
 
 

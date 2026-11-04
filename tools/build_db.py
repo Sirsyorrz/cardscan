@@ -507,8 +507,74 @@ def build_pokemon(db):
         sets.setdefault(s["id"], pokemon_set(s, s["id"], "en", abbr, s["name"]))
         names.add((norm(d["name"]), d["name"], "pkm"))
 
+    added = tcgplayer_only_sets(groups, group_numbers, prices, set(set_group.values()), set_details,
+                                cards, texts, plist, names, variant_rows, extras, sets)
+    if added:
+        print(f"pokemon: {added} cards from TCGplayer only (sets TCGdex doesn't have yet)")
     cards = finish_pokemon(cards, extras)
     save_pokemon(db, "pokemon", cards, texts, plist, names, variant_rows, matched, sets)
+
+
+SUBTYPE_FINISH = {"Normal": "normal", "Holofoil": "holo", "Reverse Holofoil": "reverse"}
+# numbered expansions ("ME06: Delta Reign"), not promos, decks or sealed-only groups
+EXPANSION_GROUP = re.compile(r"^[A-Z]{1,4}\d{1,3}[a-z]?:\s")
+
+
+def tcgplayer_only_sets(groups, group_numbers, prices, covered, set_details, cards, texts, plist, names, variant_rows,
+                        extras, sets):
+    """Cards of expansions TCGplayer lists but TCGdex doesn't have yet (new releases), from the product data alone.
+    They get name, number, rarity, HP, attacks, finishes, prices and the TCGplayer image; no artist or legality
+    beyond "a current set is legal". Their ids are `tcg-<productId>`; once TCGdex adds the set, these rows go away
+    and collection.py moves owned copies over by product id."""
+    newest = max((s.get("releaseDate") or "") for s in set_details)
+    count = 0
+    for g in groups:
+        gid = g["groupId"]
+        released = (g.get("publishedOn") or "")[:10]
+        if gid in covered or g.get("isSupplemental") or released <= newest or not EXPANSION_GROUP.match(g["name"]):
+            continue
+        products = [p for ps in group_numbers.get(gid, {}).values() for p in ps]
+        if not products:
+            continue
+        code = g.get("abbreviation") or g["name"].split(":")[0]
+        set_name = re.sub(r"^[A-Z0-9 ]+:\s*", "", g["name"])
+        set_id = f"tcg-{gid}"
+        numbers = [next(e["value"] for e in p["extendedData"] if e["name"] == "Number") for p in products]
+        official = max((int(n.split("/")[1]) for n in numbers if "/" in n and n.split("/")[1].isdigit()), default=0)
+        s = {"id": set_id, "name": set_name, "releaseDate": released, "cardCount": {"official": official}}
+        for p, number in zip(products, numbers):
+            ext = {e["name"]: e["value"] for e in p["extendedData"]}
+            pid = p["productId"]
+            local = number.split("/")[0]
+            name = re.sub(r"\s*\((Left|Right)\)\s*$", "", product_card_name(p["name"]))
+            card_type = ext.get("Card Type", "")
+            category = "Trainer" if card_type.startswith("Trainer") else "Energy" if "Energy" in card_type else "Pokemon"
+            body = "\n".join(re.sub(r"<br>\s*", ": ", re.sub(r"<(?!br)[^>]+>", "", ext[k])) for k in ("Attack 1", "Attack 2", "Attack 3", "CardText") if ext.get(k))
+            card_id = f"tcg-{pid}"
+            card_variants = {
+                SUBTYPE_FINISH[sub]: (TYPE_LABEL[SUBTYPE_FINISH[sub]], SUBTYPE_FINISH[sub], pid, gid, sub, True)
+                for sub in prices.get(pid, {}) if sub in SUBTYPE_FINISH
+            } or {"normal": (TYPE_LABEL["normal"], "normal", pid, gid, None, True)}
+            finishes = add_variants(card_id, card_variants, prices, variant_rows, plist)
+            if body:
+                texts[card_id] = body
+            type_line = " · ".join(t for t in (category, ext.get("Stage"), card_type if category != "Pokemon" else None) if t)
+            types = card_type if category == "Pokemon" else ""
+            cards.append((
+                card_id, "pkm", name, norm(name), code, set_name,
+                local, number_sort(local), str(official or ""),
+                ext.get("Rarity"), type_line, None, None, types,
+                None, None, int(ext["HP"]) if ext.get("HP", "").isdigit() else None, None, released,
+                image_path(None, pid), ",".join(finishes),
+                card_id if body else None, pid, gid, None, 0, "en", None, None,
+            ))
+            d = {"category": category, "energyType": "Special" if "Special" in card_type else "Normal", "localId": local,
+                 "legal": {"standard": True, "expanded": True}}
+            extras.append(pokemon_extras(d, s, set_id, "en", name, body))
+            sets.setdefault(set_id, pokemon_set(s, set_id, "en", code, set_name))
+            names.add((norm(name), name, "pkm"))
+            count += 1
+    return count
 
 
 # TCGplayer Japan lists mirror and patterned holos as their own products: "Bulbasaur - 001/165 (Poke Ball Pattern)".
