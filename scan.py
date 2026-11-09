@@ -261,7 +261,7 @@ class Session:
     def _seen(self, name):
         """The entry first read as `name` among the last REPEAT_WINDOW captures."""
         for e in reversed(self.entries[-REPEAT_WINDOW:]):
-            if e["id"] and e["name"] == name and e["status"] != "rejected":
+            if e["id"] and e["name"] == name and e["status"] != "rejected" and not e.get("name_unread"):
                 return self.entries[e["repeat_of"] - 1] if e.get("repeat_of") else e
         return None
 
@@ -286,8 +286,9 @@ class Session:
         entry["finish"] = collection.pick_finish(self.db, r.id, mode) if self.db and r.id else None
         # A name read within the last few captures is the same card read again (it slid after landing, or the one
         # on top slid off it); a second copy is never dropped that soon after the first. The surer read decides
-        # the printing.
-        prev = self._seen(r.name) if r.id else None
+        # the printing. A bare number guess isn't a name read: "199/204" alone picks the newest set printing it, the
+        # same guess for any set's #199.
+        prev = self._seen(r.name) if r.id and not r.name_unread else None
         if prev:
             status = "repeat"
             if RANK[r.confidence] > RANK[prev["confidence"]] and not c.rough:

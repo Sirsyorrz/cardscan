@@ -45,6 +45,8 @@ class Result:
     upside_down: bool = False
     candidates: list | None = None
     by_number: bool = False
+    # only a collector number read: the card is a guess among every set printing that number
+    name_unread: bool = False
     # the printing was chosen by comparing artwork; `art_sure` when it won clearly
     by_art: bool = False
     art_sure: bool = False
@@ -217,7 +219,7 @@ class Identifier:
         return Result(
             id=m["id"], name=m["name"], set_code=m["set_code"], set_name=reply["card"]["set_name"],
             number=m["number"], confidence=m["confidence"], game=reply["game"], upside_down=upside_down,
-            candidates=m.get("candidates"), by_number=bool(m.get("byNumber")),
+            candidates=m.get("candidates"), by_number=bool(m.get("byNumber")), name_unread=bool(m.get("nameUnread")),
         )
 
 
