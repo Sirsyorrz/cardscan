@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import collection
+import importer
 import prices
 from collection import norm
 
@@ -336,7 +337,7 @@ def rate(_q):
 
 GET = {"/api/rate": rate, "/api/sessions": sessions, "/api/scans": scans, "/api/options": options, "/api/search": search,
        "/api/finishes": finishes, "/api/items": items, "/api/card": card_detail, "/api/sets": binder_sets,
-       "/api/binder": binder}
+       "/api/binder": binder, "/api/imports": lambda _q: importer.history(db())}
 
 
 def post_scan(scan_id, body):
@@ -359,6 +360,15 @@ def post_item(body):
     else:
         collection.adjust(db(), card, finish, cond, int(body["delta"]))
     return {"ok": True}
+
+
+def post_import(body):
+    """{text, name, apply}: the plan for a CSV, or with `apply` the import itself. The per-card lines stay out of the
+    reply; an export of a big collection has thousands."""
+    p = importer.apply(db(), body["text"], body.get("name") or "import") if body.get("apply") else importer.plan(
+        db(), body["text"])
+    p.pop("lines")
+    return p
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -441,6 +451,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, post_scan(int(url.path.rsplit("/", 1)[1]), body))
             if url.path == "/api/items":
                 return self._send(200, post_item(body))
+            if url.path == "/api/import":
+                return self._send(200, post_import(body))
+            if url.path.startswith("/api/imports/") and url.path.endswith("/undo"):
+                importer.undo(db(), int(url.path.split("/")[3]))
+                return self._send(200, {"ok": True})
             if url.path == "/api/prices":
                 return self._send(200, post_prices())
             return self._send(404, {"error": "not found"})

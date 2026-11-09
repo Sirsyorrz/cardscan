@@ -14,6 +14,7 @@ streamed in as a virtual webcam (see [Camera](#camera)).
 - Lorcana, Magic, Pokémon and Japanese Pokémon, including showcase and alternate art printings
 - A finish toggle for foils, reverse holos and holos while scanning
 - Review page for unsure reads, a collection with TCGplayer prices in AUD, card search and set binders
+- Imports collections from ManaBox, Moxfield, Deckbox and TCGplayer CSVs
 - Built-in updater
 
 ## Install
@@ -102,6 +103,7 @@ recorded video file.
 .venv/bin/python scan.py /dev/video0 --size 3840x2160   # ask the camera for 4K (default 1920x1080)
 .venv/bin/python review.py                              # http://localhost:8765, alongside or afterwards
 .venv/bin/python prices.py                              # refresh prices of everything owned
+.venv/bin/python importer.py export.csv                 # what a CSV would import (--apply to import it)
 ```
 
 On Linux, `cat /sys/class/video4linux/video*/name` lists the cameras.
@@ -137,6 +139,9 @@ The collection only lives in `data/collection.db`, so back it up.
   New captures appear while a scan is running, and Delete session drops a session with the cards it added.
 - Collection lists what you own with prices, +/- per row, sortable columns and a price refresh. Click a card for its
   prices, stats and other printings. Prices are TCGplayer market prices converted to AUD.
+- Import (on Collection) adds a CSV exported from ManaBox, Moxfield, Deckbox, TCGplayer or any app with name, set and
+  collector number columns. It shows what matched and what didn't before adding anything, and an import can be
+  undone later. ManaBox exports match by Scryfall id; others by set and number, checked against the name.
 - Search finds any card by name or by set and number (`DLR 44`, `044/103`, Lorcana `6 1`) with its price. Click one
   to add copies by hand.
 - Binders lists every set with how many of its base slots you own. A secret rare or alternate art fills the base

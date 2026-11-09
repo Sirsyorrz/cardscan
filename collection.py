@@ -65,6 +65,17 @@ CREATE TABLE IF NOT EXISTS prices (
   PRIMARY KEY (card_id, finish, source)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- collections imported from other apps' CSVs, with what each added so it can be undone
+CREATE TABLE IF NOT EXISTS imports (
+  id INTEGER PRIMARY KEY,
+  at INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  source TEXT NOT NULL,
+  copies INTEGER NOT NULL,
+  -- JSON [[card_id, finish, condition, qty], ...]
+  lines TEXT NOT NULL,
+  undone INTEGER NOT NULL DEFAULT 0
+);
 """
 
 # Finish keys: Magic uses Scryfall's nonfoil/foil/etched; Pokemon keys start with normal/holo/reverse and append

@@ -5,6 +5,7 @@ import { api, cardLine, gameOf, money, url, type Item, type Items } from "../api
 import { useStore } from "../state";
 import CardModal from "./CardModal";
 import GameSelect from "./GameSelect";
+import ImportModal from "./ImportModal";
 
 type SortKey = "name" | "set" | "finish" | "price" | "qty" | "added";
 
@@ -53,6 +54,7 @@ export default function CollectionView() {
   const [refreshing, setRefreshing] = useState(false);
   const [opened, setOpened] = useState<string | null>(null);
   const [game, setGame] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(
     () => api<Items>(`/api/items?q=${encodeURIComponent(q)}`).then(setData),
@@ -125,6 +127,9 @@ export default function CollectionView() {
         <button disabled={refreshing} onClick={refresh}>
           {refreshing ? "Refreshing" : "Refresh prices"}
         </button>
+        <button title="Add cards from another app's CSV export" onClick={() => setImporting(true)}>
+          Import
+        </button>
       </div>
       <div className="summary">
         <b>{copies}</b> cards · {rows.length} entries · <b className="accent">{money(value, rate) || "no prices"}</b>
@@ -159,7 +164,10 @@ export default function CollectionView() {
                 <td>
                   {r.set_name} <span className="dim">{cardLine(r)}</span>
                 </td>
-                <td>{r.finish_label}</td>
+                <td>
+                  {r.finish_label}
+                  {r.condition !== "NM" && <span className="dim"> · {r.condition}</span>}
+                </td>
                 <td className="num">{money(r.usd, rate)}</td>
                 <td className="num qty" onClick={(e) => e.stopPropagation()}>
                   <button onClick={() => adjust(i, -1)}>−</button>
@@ -175,6 +183,7 @@ export default function CollectionView() {
         </table>
         {data && !rows.length && <div className="empty dim">{q || game ? "No matches." : "Nothing in the collection yet."}</div>}
       </div>
+      {importing && <ImportModal onClose={() => setImporting(false)} onImported={load} />}
       {opened && <CardModal id={opened} onClose={() => setOpened(null)} onChanged={load} />}
     </div>
   );
