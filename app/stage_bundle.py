@@ -9,6 +9,8 @@ import json
 import shutil
 import sys
 import tarfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -40,11 +42,21 @@ PLATFORMS = {
 def fetch(url):
     DOWNLOADS.mkdir(parents=True, exist_ok=True)
     path = DOWNLOADS / url.rsplit("/", 1)[1]
-    if not path.exists():
-        part = path.with_suffix(path.suffix + ".part")
-        with urllib.request.urlopen(url) as r, open(part, "wb") as f:
-            shutil.copyfileobj(r, f)
-        part.rename(path)
+    if path.exists():
+        return path
+    part = path.with_suffix(path.suffix + ".part")
+    # GitHub's release downloads throw the odd 5xx
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as r, open(part, "wb") as f:
+                shutil.copyfileobj(r, f)
+            break
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt == 4 or (isinstance(e, urllib.error.HTTPError) and e.code < 500):
+                raise
+            print(f"{url}: {e}, retrying", file=sys.stderr)
+            time.sleep(10 * (attempt + 1))
+    part.rename(path)
     return path
 
 
