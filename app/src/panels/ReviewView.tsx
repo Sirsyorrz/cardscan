@@ -220,7 +220,12 @@ function Detail({
     if (s.status === "added") update(s.id, { finish: f }, "Updated");
   };
 
-  const choose = (id: string) => decide(s.id, { card_id: id, status: "added" }, "Changed and added");
+  // picking only previews the printing; Enter or Add confirms it. An already added capture stays added.
+  const choose = (id: string) => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    if (id === s.card_id) return;
+    update(s.id, s.status === "added" ? { card_id: id } : { card_id: id, status: "review" }, "Changed");
+  };
 
   const extra = async () => {
     await api("/api/items", { card_id: s.card_id, finish: finish || s.finish, delta: 1 });
