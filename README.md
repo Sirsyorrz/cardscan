@@ -1,102 +1,163 @@
 # cardscan
 
-Bulk card scanning (Magic, Pokémon, Japanese Pokémon) on the PC: the phone's camera over USB, cards dropped one at
-a time on a pile, each one identified as it lands.
+Bulk card scanning for Lorcana, Magic, Pokémon and Japanese Pokémon. A camera points down at a pile, you drop cards
+on it one at a time, and each card is identified and added to your collection as it lands.
+
+Runs on Linux and Windows. Any camera OpenCV can open works: a USB webcam, a phone in USB webcam mode, or a phone
+streamed in as a virtual webcam (see [Camera](#camera)).
+
+## Requirements
+
+- Python 3 (tested on 3.14) and Node 22.18+ (the matcher runs its TypeScript directly)
+- An NVIDIA GPU: OCR runs through `onnxruntime-gpu` on CUDA
+- A camera on a stand or arm, pointing straight down
 
 ## Setup
 
-```fish
-python3 -m venv .venv; .venv/bin/pip install -r requirements.txt; .venv/bin/pip install --force-reinstall --no-deps opencv-python==5.0.0.93
+```sh
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install --force-reinstall --no-deps opencv-python==5.0.0.93
 ```
 
-The second install matters: RapidOCR pulls in `opencv-python-headless`, which shares the `cv2` folder and leaves it
+The last line matters: RapidOCR pulls in `opencv-python-headless`, which shares the `cv2` folder and leaves it
 without window support, so `--show` fails until the full build is reinstalled over it.
 
-The card database (`data/cards.db`, about 100 MB, not in git) is built from Scryfall, TCGdex, tcgcsv and Card
-Kingdom; downloads are cached in `tools/cache/`:
+Then build the card database (`data/cards.db`, about 100 MB). It comes from Scryfall, TCGdex, Lorcast, tcgcsv and
+Card Kingdom, and downloads are cached in `tools/cache/`:
 
-```fish
-python3 tools/build_db.py
+```sh
+.venv/bin/python tools/build_db.py
 ```
 
-The matcher needs Node 22.18+ (it runs the TypeScript directly). `npm install` only fetches TypeScript for
-`npm run typecheck`; `npm test` runs the matcher tests against `data/cards.db`.
+## Desktop app
 
-## App
+`app/` is a desktop window over the scripts (Tauri + React) that runs the Python in this folder's `.venv`. Scan has
+the camera picker, Start/Stop, the finish toggle and the live feed with the cards identified so far. Review,
+Collection, Search and Binders are the pages described under [Reviewing](#reviewing), and Settings has the price
+refresh and the card data rebuild.
 
-`app/` is a desktop window over the scripts below (Tauri + React, this PC only: it runs the Python in this
-folder's `.venv`). Scan has the camera picker, Start/Stop, the finish toggle (Normal, Foil / Reverse, Holo, switchable
-mid-run) and the live feed with the cards identified so far. Review and Collection are the pages review.py served,
-and Settings has the price refresh and the card data rebuild.
+It needs Rust and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS.
 
-```fish
-cd ~/Documents/GitHub/cardscan/app; npm install; ./run.sh    # builds and starts it
+```sh
+cd app
+npm install
+./run.sh    # builds and starts it
 ```
 
-The scripts still work on their own:
+### Windows installer
 
-## Use
+`app/release-windows.sh` cross-builds a Windows installer from Linux into
+`app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`. It bundles the scripts, uv, node and the current
+`data/cards.db`. On first run the app copies the scripts to `%LOCALAPPDATA%\dev.cardscan.app` and installs Python and
+the packages there (about 2 GB); the collection and captures live there too.
 
-Plug the phone in and pick "Webcam" in its USB options, then switch the webcam preview to the back camera. It shows
-up as "Pixel 9 Pro XL: Android Webcam" (`/dev/video2` here; `cat /sys/class/video4linux/video*/name` to check).
+The script expects a rustup with the `x86_64-pc-windows-msvc` target and cargo-xwin in
+`~/.local/share/{rustup,cargo}-win`, and a native `makensis` built from the NSIS 3.13 source with the Windows
+release's `Stubs`, `Plugins`, `Include` and `Contrib` in `~/.local/share/nsis-build/nsis/`. Set `CARDSCAN_WIN_TOOLS`
+to use a folder other than `~/.local/share`.
 
-```fish
-.venv/bin/python scan.py /dev/video2 --show            # q or Esc to stop
-.venv/bin/python scan.py /dev/video2 --show --foil     # start with the finish toggle on foil
-.venv/bin/python review.py                             # http://localhost:8765, alongside or afterwards
-.venv/bin/python prices.py                             # refresh prices of everything owned
+## Scanning from the command line
+
+The scripts work without the app. The source is a camera (`/dev/videoN` on Linux, a camera index on Windows) or a
+recorded video file.
+
+```sh
+.venv/bin/python scan.py /dev/video0 --show             # q or Esc to stop
+.venv/bin/python scan.py /dev/video0 --show --foil      # start with the finish toggle on foil
+.venv/bin/python scan.py /dev/video0 --size 3840x2160   # ask the camera for 4K (default 1920x1080)
+.venv/bin/python review.py                              # http://localhost:8765, alongside or afterwards
+.venv/bin/python prices.py                              # refresh prices of everything owned
 ```
 
-The window's top-right button (or F) sets the finish of the cards you drop next: Normal, Foil / Reverse (Magic
-foil, Pokémon reverse holo) or Holo (Pokémon holo; Magic foil). A card gets the setting from when it landed. When
-a card doesn't come in that finish, it gets the nearest one it does.
+On Linux, `cat /sys/class/video4linux/video*/name` lists the cameras.
 
-Each run is a session: its captures (straightened, upright) go to `captures/<session>/` with a labelled
-`sheet.jpg`, and every capture is recorded in `data/collection.db` with a status:
+The window's top-right button (or F) sets the finish of the cards you drop next:
 
-- `added`: identified and counted in the collection (`confidence` high: name plus set code or number agree;
-  medium: one of them fuzzy or missing, or the printing chosen from the artwork)
+- Normal
+- Foil / Reverse: Magic and Lorcana foil, Pokémon reverse holo
+- Holo: Pokémon holo; Magic and Lorcana foil
+
+A card gets the setting from when it landed. When a card doesn't come in that finish, it gets the nearest one it does.
+
+Each run is a session. Its captures (straightened, upright) go to `captures/<session>/` with a labelled `sheet.jpg`,
+and every capture is recorded in `data/collection.db` with a status:
+
+- `added`: identified and counted in the collection. Confidence is high when the name and the set code or number
+  agree, medium when one of them is fuzzy or missing or the printing was chosen from the artwork.
 - `review`: no match, a low-confidence guess, or a capture that wasn't a clean card outline (a card stuck on its
   edge) unless it still matched with high confidence. Not counted until confirmed.
 - `repeat`: the same name as the card before, i.e. the same card read again after it slid. A second copy is never
-  dropped straight after the first; add extra copies by hand. The surer of the two reads keeps the printing.
+  added straight after the first; add extra copies by hand. The surer of the two reads keeps the printing.
 - `rejected`: marked "not a card" on the review page.
 
-The review page shows a session's captures next to the matched card. Pick another printing or search for the right
-card, set finish and condition, mark it not a card, or add more copies (keys: J/K to move, Enter to add, X to
-reject, / to search). New captures appear while a scan is running. The Collection tab lists what you own with
-prices in AUD, +/- per row, and a price refresh.
+`--record /tmp/session.mkv` saves the raw feed, and `scan.py /tmp/session.mkv --no-db --out /tmp/caps` replays it
+without touching the collection, which is handy for tuning.
 
-Recording a session (`--record /tmp/session.mkv`) makes it replayable for tuning without touching the collection:
-`scan.py /tmp/session.mkv --no-db --out /tmp/caps`.
+The collection only lives in `data/collection.db`, so back it up.
 
-The collection is only in `data/collection.db` (not in git); back it up.
+## Reviewing
+
+- Review shows a session's captures next to the matched card. Pick another printing or search for the right card,
+  set the finish, mark it not a card, or add more copies (arrows to move, Enter to add, X to reject, / to search).
+  New captures appear while a scan is running, and Delete session drops a session with the cards it added.
+- Collection lists what you own with prices, +/- per row, sortable columns and a price refresh. Click a card for its
+  prices, stats and other printings. Prices are TCGplayer market prices converted to AUD.
+- Search finds any card by name or by set and number (`DLR 44`, `044/103`, Lorcana `6 1`) with its price. Click one
+  to add copies by hand.
+- Binders lists every set with how many of its base slots you own. A secret rare or alternate art fills the base
+  slot of the card with the same name. Tokens, promos and kits are behind a toggle. Opening a set shows its binder
+  with missing cards dimmed, the cost to complete it, and the secret rares and alternates below.
+
+## Camera
+
+Whatever the camera, it has to be fixed above the pile pointing straight down: camera shake reads as motion and cards
+get missed. Frame it so a card fills most of the picture, and keep glare and window light off it. Cards catch on
+sloped tray walls and stand on their edge; a flat surface with a low lip, or dropping from just above the pile,
+avoids that.
+
+The collector number is the smallest print on the card, so sharpness matters more than anything else. A good 1080p
+webcam with autofocus works; a phone camera usually reads better.
+
+### USB webcam
+
+Plug it in and use it directly. On Linux it's a `/dev/videoN`; on Windows, the app lists it by name.
+
+### Android phone as a USB webcam
+
+Android 14 and later can act as a USB webcam on many phones (Pixel and others): plug it in, pick "Webcam" in the USB
+notification's options, then switch the preview on the phone to the back camera. It shows up like any webcam.
+This mode tops out at 1920x1080.
+
+### Other phones and webcam apps
+
+Anything that turns a phone into a webcam device the OS sees (DroidCam, Iriun and the like, on Android or iPhone)
+works the same way: pick it in the app's camera list, or pass its `/dev/videoN` or index to `scan.py`. Use the back
+camera at the highest resolution and bit rate the app allows.
 
 ## How it works
 
 - `watch.py` decides when a card has landed: the picture around the pile goes still and differs from the last
-  still picture. `detect.py` (ported from the old Android app) finds the exact outline on a crop around it.
+  still picture. `detect.py` finds the exact outline on a crop around it.
 - `identify.py` reads the name strip both ways up (whichever gives a known name is up) and the collector strip,
   with RapidOCR on the GPU on a worker thread: about 0.5 s a card, twice that when the first read is unsure and a
   looser crop is tried. A rough capture that matches nothing gets searched again for the card at full resolution.
+  Lorcana prints its name mid-card, so that strip is read too when the top and bottom don't settle a card, and a
+  Lorcana location (printed sideways) has its collector line read turned a quarter either way.
 - `matcher/matcher.ts` is a long-running Node process that resolves the OCR lines with `matcher/match.ts` against
-  `data/cards.db`: name (fuzzy), set code and collector number, for Magic, Pokémon and Japanese Pokémon.
+  `data/cards.db`: name (fuzzy), set code and collector number.
 - `art.py`: when the name and set were read but the collector number wasn't, the capture is compared with the
-  official image of each printing in that set (showcase, borderless and so on); images are cached in `data/images/`.
+  official image of each printing in that set (showcase, borderless and so on). Images are cached in `data/images/`.
 - `collection.py` keeps the collection: owned copies by card, finish and condition, plus every session and capture.
   Changing a capture's card or status moves its copy.
-- `tools/build_db.py` builds `data/cards.db`. Pokémon sets TCGplayer lists before TCGdex has them (new releases)
+- `tools/build_db.py` builds `data/cards.db`. Pokémon sets that TCGplayer lists before TCGdex has them (new releases)
   come from TCGplayer's product data alone (ids `tcg-<productId>`, no artist or legality, images once TCGplayer has
   them); when a later build has the real cards, owned copies move over by product id.
 
-## Camera
+## Development
 
-The phone has to be fixed above the pile (a stand or arm, pointing straight down); camera shake reads as motion and
-cards get missed. Frame it so the card fills most of the picture, and keep window light off it. Cards catch on
-sloped tray walls and stand on their edge; a flat surface with a low lip, or dropping from just above the pile,
-avoids that.
-
-Webcam mode tops out at 1920x1080. If collector numbers come out too soft, `phonecam.fish` streams the camera through
-scrcpy instead (needs USB debugging rather than webcam mode, plus
-`shelly install standard scrcpy v4l2loopback-utils`), at any size the camera supports:
-`./phonecam.fish 3840x2160`, then `scan.py /dev/video42 --size 3840x2160`.
+```sh
+npm install          # only fetches TypeScript for the typecheck
+npm test             # matcher tests, against data/cards.db
+npm run typecheck
+```
