@@ -219,7 +219,7 @@ fn main() {
         .setup(|app| {
             // only the installers (tauri.bundle.conf.json) have resources
             let bundle = app.path().resource_dir()?.join("cardscan");
-            let rt = if bundle.join("app").join("scan.py").exists() {
+            let rt = if !cardscan::is_checkout() && bundle.join("app").join("scan.py").exists() {
                 Runtime::installed(bundle, app.path().app_local_data_dir()?)?
             } else {
                 Runtime::checkout()

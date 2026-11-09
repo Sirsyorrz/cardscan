@@ -20,6 +20,22 @@ pub fn root() -> PathBuf {
     built.canonicalize().unwrap_or(built)
 }
 
+/// A binary built in this repo (run.sh, cargo, tauri build) or pointed at a checkout with `CARDSCAN_DIR`.
+/// `tauri build` copies the installer resources next to target/release's binary too, so their presence alone
+/// doesn't make an installed copy.
+pub fn is_checkout() -> bool {
+    if std::env::var_os("CARDSCAN_DIR").is_some() {
+        return true;
+    }
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (Ok(exe), Ok(repo)) =
+        (std::env::current_exe().and_then(|e| e.canonicalize()), repo.canonicalize())
+    else {
+        return false;
+    };
+    exe.starts_with(repo)
+}
+
 const PYTHON_VERSION: &str = "3.14";
 
 /// Where the Python side lives and how to start it.
