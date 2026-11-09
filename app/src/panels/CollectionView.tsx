@@ -1,19 +1,62 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { api, cardLine, money, type Items } from "../api";
+import { api, cardLine, gameOf, money, url, type Item, type Items } from "../api";
 import { useStore } from "../state";
+import CardModal from "./CardModal";
+import GameSelect from "./GameSelect";
+
+type SortKey = "name" | "set" | "finish" | "price" | "qty" | "added";
+
+const text = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
+
+const COMPARE: Record<SortKey, (a: Item, b: Item) => number> = {
+  name: (a, b) => text(a.name, b.name) || text(a.set_name, b.set_name),
+  set: (a, b) =>
+    text(a.set_name, b.set_name) || (a.number_sort ?? 0) - (b.number_sort ?? 0) || text(a.number, b.number),
+  finish: (a, b) => text(a.finish_label, b.finish_label) || text(a.name, b.name),
+  price: (a, b) => (a.usd ?? -1) - (b.usd ?? -1),
+  qty: (a, b) => a.qty - b.qty || text(a.name, b.name),
+  added: (a, b) => a.added_at - b.added_at,
+};
+
+// Clicking a new column starts high-to-low for numbers and dates, A-Z for text.
+const DESC_FIRST: SortKey[] = ["price", "qty", "added"];
+
+/** The card image, or your own scan of it when there's none online yet (new sets, before TCGplayer has photos). */
+function Thumb({ item }: { item: Item }) {
+  const capture = item.capture_id ? url(`/capture/${item.capture_id}`) : null;
+  const [src, setSrc] = useState(item.img ?? capture);
+  if (!src) return null;
+  return (
+    <img
+      loading="lazy"
+      src={src}
+      alt=""
+      onError={(e) => (capture && src !== capture ? setSrc(capture) : (e.currentTarget.style.visibility = "hidden"))}
+    />
+  );
+}
+
+function added(ms: number) {
+  const d = new Date(ms);
+  return d.toDateString() === new Date().toDateString()
+    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString();
+}
 
 export default function CollectionView() {
   const say = useStore((s) => s.say);
   const [q, setQ] = useState("");
-  const [sort, setSort] = useState("recent");
+  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "added", desc: true });
   const [data, setData] = useState<Items | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [opened, setOpened] = useState<string | null>(null);
+  const [game, setGame] = useState("");
 
   const load = useCallback(
-    () => api<Items>(`/api/items?q=${encodeURIComponent(q)}&sort=${sort}`).then(setData),
-    [q, sort],
+    () => api<Items>(`/api/items?q=${encodeURIComponent(q)}`).then(setData),
+    [q],
   );
 
   useEffect(() => {
@@ -45,12 +88,31 @@ export default function CollectionView() {
   };
 
   const adjust = async (i: number, delta: number) => {
-    const r = data!.items[i];
+    const r = rows[i];
     await api("/api/items", { card_id: r.card_id, finish: r.finish, condition: r.condition, delta });
     load();
   };
 
-  const rows = data?.items ?? [];
+  const rows = useMemo(() => {
+    const cmp = COMPARE[sort.key];
+    return (data?.items ?? [])
+      .filter((r) => !game || gameOf(r) === game)
+      .sort((a, b) => (sort.desc ? cmp(b, a) : cmp(a, b)));
+  }, [data, sort, game]);
+
+  const perGame = (key: string) =>
+    (data?.items ?? []).reduce((n, r) => (!key || gameOf(r) === key ? n + r.qty : n), 0);
+
+  const sortBy = (key: SortKey) =>
+    setSort((s) => (s.key === key ? { key, desc: !s.desc } : { key, desc: DESC_FIRST.includes(key) }));
+
+  const header = (key: SortKey, label: string, num = false) => (
+    <th className={`sortable${num ? " num" : ""}`} onClick={() => sortBy(key)}>
+      {label}
+      {sort.key === key && <span className="arrow">{sort.desc ? "▼" : "▲"}</span>}
+    </th>
+  );
+
   const rate = data?.aud_per_usd ?? null;
   const copies = rows.reduce((n, r) => n + r.qty, 0);
   const value = rows.reduce((n, r) => n + (r.usd || 0) * r.qty, 0);
@@ -59,12 +121,7 @@ export default function CollectionView() {
     <div className="view">
       <div className="toolbar">
         <input className="grow" placeholder="Filter by name" value={q} onChange={(e) => setQ(e.target.value)} />
-        <select value={sort} onChange={(e) => setSort(e.target.value)}>
-          <option value="recent">Recent</option>
-          <option value="name">Name</option>
-          <option value="set">Set</option>
-          <option value="value">Value</option>
-        </select>
+        <GameSelect value={game} onChange={setGame} count={perGame} />
         <button disabled={refreshing} onClick={refresh}>
           {refreshing ? "Refreshing" : "Refresh prices"}
         </button>
@@ -81,26 +138,19 @@ export default function CollectionView() {
           <thead>
             <tr>
               <th></th>
-              <th>Card</th>
-              <th>Set</th>
-              <th>Finish</th>
-              <th>Cond.</th>
-              <th className="num">Price</th>
-              <th className="num">Qty</th>
+              {header("name", "Card")}
+              {header("set", "Set")}
+              {header("finish", "Finish")}
+              {header("price", "Price", true)}
+              {header("qty", "Qty", true)}
+              {header("added", "Added", true)}
             </tr>
           </thead>
           <tbody>
             {rows.map((r, i) => (
-              <tr key={`${r.card_id}|${r.finish}|${r.condition}`}>
+              <tr key={`${r.card_id}|${r.finish}|${r.condition}`} className="clickable" onClick={() => setOpened(r.card_id)}>
                 <td>
-                  {r.img && (
-                    <img
-                      loading="lazy"
-                      src={r.img}
-                      alt=""
-                      onError={(e) => (e.currentTarget.style.visibility = "hidden")}
-                    />
-                  )}
+                  <Thumb item={r} />
                 </td>
                 <td>
                   {r.name}
@@ -110,19 +160,22 @@ export default function CollectionView() {
                   {r.set_name} <span className="dim">{cardLine(r)}</span>
                 </td>
                 <td>{r.finish_label}</td>
-                <td>{r.condition}</td>
                 <td className="num">{money(r.usd, rate)}</td>
-                <td className="num qty">
+                <td className="num qty" onClick={(e) => e.stopPropagation()}>
                   <button onClick={() => adjust(i, -1)}>−</button>
                   <span>{r.qty}</span>
                   <button onClick={() => adjust(i, 1)}>+</button>
+                </td>
+                <td className="num dim" title={new Date(r.added_at).toLocaleString()}>
+                  {added(r.added_at)}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        {data && !rows.length && <div className="empty dim">{q ? "No matches." : "Nothing in the collection yet."}</div>}
+        {data && !rows.length && <div className="empty dim">{q || game ? "No matches." : "Nothing in the collection yet."}</div>}
       </div>
+      {opened && <CardModal id={opened} onClose={() => setOpened(null)} onChanged={load} />}
     </div>
   );
 }

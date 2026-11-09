@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Session } from "./api";
 
-export type View = "scan" | "review" | "collection";
+export type View = "scan" | "review" | "collection" | "binders" | "search";
 
 /** One identified capture of the running scan, as scan.py reports it. Repeats update the card they repeat. */
 export type LiveCard = {

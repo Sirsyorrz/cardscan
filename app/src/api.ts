@@ -14,6 +14,9 @@ export type Card = {
   img_large: string | null;
 };
 
+/** A search result: a printing with its lowest TCGplayer price and the copies owned. */
+export type Found = Card & { usd: number | null; qty: number };
+
 export type Session = {
   id: number;
   started_at: number;
@@ -33,7 +36,6 @@ export type Scan = {
   card: Card | null;
   finish: string | null;
   finish_label: string | null;
-  condition: string;
   status: ScanStatus;
   confidence: string | null;
   rough: number;
@@ -45,6 +47,9 @@ export type Item = Card & {
   finish_label: string;
   condition: string;
   qty: number;
+  added_at: number;
+  number_sort: number | null;
+  capture_id: number | null;
   usd: number | null;
 };
 
@@ -52,7 +57,50 @@ export type Items = { items: Item[]; aud_per_usd: number | null; prices_at: stri
 
 export type Finish = { key: string; label: string };
 
-export const CONDITIONS = ["NM", "LP", "MP", "HP", "DMG"];
+export type BinderSet = {
+  id: string;
+  game: string;
+  lang: string;
+  code: string;
+  name: string;
+  released: string | null;
+  kind: "main" | "extra";
+  series: string | null;
+  /** Numbered cards up to the printed total: the binder slots. */
+  base: number;
+  total: number;
+  /** Base slots filled by any printing. */
+  owned: number;
+  copies: number;
+};
+
+export type BinderCard = Card & { slot: string | null; qty: number; usd: number | null; capture_id: number | null };
+
+export type Binder = { set: Omit<BinderSet, "owned" | "copies">; cards: BinderCard[]; aud_per_usd: number | null };
+
+export type CardDetail = {
+  card: Card & {
+    rarity: string | null;
+    type_line: string | null;
+    mana_cost: string | null;
+    colors: string | null;
+    power: string | null;
+    toughness: string | null;
+    hp: number | null;
+    artist: string | null;
+    released: string | null;
+    printed_total: string | null;
+    set_total: number | null;
+    series: string | null;
+    text: string | null;
+    legal: { format: string; legal: boolean; restricted: boolean }[];
+  };
+  finishes: (Finish & { tcg?: number; ck?: number; qty: number; added_at: number | null })[];
+  scans: { id: number; session_id: number; status: string; finish: string | null; created_at: number }[];
+  printings: (Card & { qty: number; usd: number | null })[];
+  links: { label: string; url: string }[];
+  aud_per_usd: number | null;
+};
 
 export const MODES = [
   { key: "normal", label: "Normal" },
@@ -80,9 +128,20 @@ export function cardLine(c: { set_code: string; number: string; lang?: string } 
   return c ? `${c.set_code} #${c.number}${c.lang === "ja" ? " JP" : ""}` : "";
 }
 
-export function gameOf(c: Card | null) {
+/** Game filter scopes; keys must match GAME_SCOPE in review.py. */
+export const GAMES = [
+  { key: "lor", label: "Lorcana" },
+  { key: "mtg", label: "Magic" },
+  { key: "pkm", label: "Pokémon" },
+  { key: "pkj", label: "Pokémon JP" },
+].sort((a, b) => a.label.localeCompare(b.label));
+
+export const GAME_LABEL: Record<string, string> = Object.fromEntries(GAMES.map((g) => [g.key, g.label]));
+
+/** Japanese Pokémon is its own scope since it's a separate card pool. */
+export function gameOf(c: { game: string; lang: string } | null) {
   if (!c) return "";
-  return c.game === "mtg" ? "mtg" : c.lang === "ja" ? "pkj" : "pkm";
+  return c.game === "pkm" && c.lang === "ja" ? "pkj" : c.game;
 }
 
 export function money(usd: number | null | undefined, rate: number | null) {

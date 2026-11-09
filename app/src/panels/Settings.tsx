@@ -38,7 +38,7 @@ export default function Settings({ onClose }: { onClose: () => void }) {
           <div>
             Update card data
             <div className="dim">
-              Rebuild the card database from Scryfall, TCGdex and TCGplayer, for new sets. Takes several minutes.
+              Rebuild the card database from Scryfall, TCGdex, Lorcast and TCGplayer, for new sets. Takes several minutes.
             </div>
           </div>
           <button onClick={() => run("cards", "Updating card data")}>Update</button>

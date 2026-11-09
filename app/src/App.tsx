@@ -6,6 +6,8 @@ import { useStore, type LiveCard, type View } from "./state";
 import ScanView from "./panels/ScanView";
 import ReviewView from "./panels/ReviewView";
 import CollectionView from "./panels/CollectionView";
+import SearchView from "./panels/SearchView";
+import BinderView from "./panels/BinderView";
 import Settings from "./panels/Settings";
 
 export async function loadSessions() {
@@ -74,6 +76,8 @@ const VIEWS: { key: View; label: string }[] = [
   { key: "scan", label: "Scan" },
   { key: "review", label: "Review" },
   { key: "collection", label: "Collection" },
+  { key: "binders", label: "Binders" },
+  { key: "search", label: "Search" },
 ];
 
 export default function App() {

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, cardLine, CONDITIONS, gameOf, url, type Card, type Finish, type Scan } from "../api";
+import { api, cardLine, gameOf, url, type Card, type Finish, type Scan } from "../api";
 import { useStore } from "../state";
 import { loadSessions } from "../App";
+import GameSelect from "./GameSelect";
+import Lightbox from "./Lightbox";
 
 type Filter = "review" | "added" | "all";
 
@@ -17,7 +19,7 @@ export default function ReviewView() {
     if (!session) return setScans([]);
     const data = await api<{ scans: Scan[] }>(`/api/scans?session=${session}`);
     // the poll only re-renders when something changed
-    const next = JSON.stringify(data.scans.map((s) => [s.id, s.status, s.card_id, s.finish, s.condition]));
+    const next = JSON.stringify(data.scans.map((s) => [s.id, s.status, s.card_id, s.finish]));
     if (next !== sig.current) {
       sig.current = next;
       setScans(data.scans);
@@ -35,10 +37,37 @@ export default function ReviewView() {
   const shown = scans.filter((s) => filter === "all" || s.status === filter);
   const current = scans.find((s) => s.id === selected) ?? null;
 
+  const scanning = useStore((s) => s.scanning);
+  const liveSession = useStore((s) => s.liveSession);
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 3000);
+    return () => clearTimeout(t);
+  }, [confirming]);
+
+  const deleteSession = async () => {
+    if (!confirming) return setConfirming(true);
+    setConfirming(false);
+    try {
+      await api(`/api/sessions/${session}/delete`, {});
+      say(`Deleted session ${session}`);
+      loadSessions();
+    } catch (e) {
+      say(String(e));
+    }
+  };
+
+  const columns = () => {
+    const grid = document.querySelector(".grid");
+    return grid ? getComputedStyle(grid).gridTemplateColumns.split(" ").length : 1;
+  };
+
   const step = (dir: number) => {
     if (!shown.length) return;
     const i = shown.findIndex((s) => s.id === selected);
-    const next = shown[Math.min(shown.length - 1, Math.max(0, i + dir))] ?? shown[0];
+    const next = i < 0 ? shown[0] : shown[Math.min(shown.length - 1, Math.max(0, i + dir))];
     setSelected(next.id);
     document.querySelector(`.tile[data-id="${next.id}"]`)?.scrollIntoView({ block: "nearest" });
   };
@@ -54,14 +83,27 @@ export default function ReviewView() {
     }
   };
 
+  /** Add or reject a card, then select the one after it (before it, at the end of the list). */
+  const decide = async (id: number, body: Record<string, unknown>, msg: string) => {
+    const i = shown.findIndex((s) => s.id === id);
+    const next = shown[i + 1] ?? shown[i - 1] ?? null;
+    await update(id, body, msg);
+    if (next) {
+      setSelected(next.id);
+      document.querySelector(`.tile[data-id="${next.id}"]`)?.scrollIntoView({ block: "nearest" });
+    }
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (document.activeElement as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "SELECT") return;
-      if (e.key === "j") step(1);
-      else if (e.key === "k") step(-1);
-      else if (e.key === "Enter" && current?.card_id) update(current.id, { status: "added" }, "Added");
-      else if (e.key === "x" && current) update(current.id, { status: "rejected" }, "Marked not a card");
+      const move = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: columns(), ArrowUp: -columns() }[e.key];
+      if (move) {
+        e.preventDefault();
+        step(move);
+      } else if (e.key === "Enter" && current?.card_id) decide(current.id, { status: "added" }, "Added");
+      else if (e.key === "x" && current) decide(current.id, { status: "rejected" }, "Marked not a card");
       else if (e.key === "/") {
         e.preventDefault();
         document.getElementById("review-search")?.focus();
@@ -90,8 +132,18 @@ export default function ReviewView() {
         </div>
         <span className="spacer" />
         <span className="dim">
-          <kbd>J</kbd>/<kbd>K</kbd> move · <kbd>Enter</kbd> add · <kbd>X</kbd> not a card · <kbd>/</kbd> search
+          <kbd>←↑↓→</kbd> move · <kbd>Enter</kbd> add · <kbd>X</kbd> not a card · <kbd>/</kbd> search
         </span>
+        {session > 0 && (
+          <button
+            className="danger"
+            disabled={scanning && liveSession === session}
+            title={scanning && liveSession === session ? "Stop the scan first" : "Removes its captures and the cards they added"}
+            onClick={deleteSession}
+          >
+            {confirming ? "Click again to delete" : "Delete session"}
+          </button>
+        )}
       </div>
       <div className="split">
         <div className="grid-wrap">
@@ -120,7 +172,7 @@ export default function ReviewView() {
             <div className="empty dim">{filter === "review" && scans.length ? "Nothing left to review." : "Nothing here."}</div>
           )}
         </div>
-        {current && <Detail key={current.id} scan={current} update={update} />}
+        {current && <Detail key={current.id} scan={current} update={update} decide={decide} />}
       </div>
     </div>
   );
@@ -129,9 +181,12 @@ export default function ReviewView() {
 function Detail({
   scan: s,
   update,
+  decide,
 }: {
   scan: Scan;
   update: (id: number, body: Record<string, unknown>, msg: string) => Promise<void>;
+  /** like `update`, then moves on to the next card */
+  decide: (id: number, body: Record<string, unknown>, msg: string) => Promise<void>;
 }) {
   const say = useStore((st) => st.say);
   const [finishes, setFinishes] = useState<Finish[]>([]);
@@ -140,7 +195,7 @@ function Detail({
   const [game, setGame] = useState(gameOf(s.card));
   const [results, setResults] = useState<Card[]>([]);
   const [finish, setFinish] = useState(s.finish ?? "");
-  const [condition, setCondition] = useState(s.condition || "NM");
+  const [enlarged, setEnlarged] = useState(false);
 
   useEffect(() => {
     if (s.card_id) api<Finish[]>(`/api/finishes?card=${encodeURIComponent(s.card_id)}`).then(setFinishes);
@@ -149,8 +204,7 @@ function Detail({
 
   useEffect(() => {
     setFinish(s.finish ?? "");
-    setCondition(s.condition || "NM");
-  }, [s.finish, s.condition]);
+  }, [s.finish]);
 
   useEffect(() => {
     if (q.trim().length < 2) return setResults([]);
@@ -161,25 +215,27 @@ function Detail({
     return () => clearTimeout(t);
   }, [q, game]);
 
-  const change = (f: string, c: string) => {
+  const change = (f: string) => {
     setFinish(f);
-    setCondition(c);
-    if (s.status === "added") update(s.id, { finish: f, condition: c }, "Updated");
+    if (s.status === "added") update(s.id, { finish: f }, "Updated");
   };
 
-  const choose = (id: string) => update(s.id, { card_id: id, status: "added" }, "Changed and added");
+  const choose = (id: string) => decide(s.id, { card_id: id, status: "added" }, "Changed and added");
 
   const extra = async () => {
-    await api("/api/items", { card_id: s.card_id, finish: finish || s.finish, condition, delta: 1 });
+    await api("/api/items", { card_id: s.card_id, finish: finish || s.finish, delta: 1 });
     say(`Added another ${s.card?.name}`);
   };
 
   return (
     <div className="detail">
-      <div className="pair">
+      <div className="pair zoomable" title="Click to enlarge" onClick={() => setEnlarged(true)}>
         <img src={url(`/capture/${s.id}`)} alt="" />
         {s.card?.img_large ? <img src={s.card.img_large} alt="" onError={hide} /> : <div className="noimg dim">No image</div>}
       </div>
+      {enlarged && (
+        <Lightbox images={[url(`/capture/${s.id}`), s.card?.img_large ?? null]} onClose={() => setEnlarged(false)} />
+      )}
       <h3>
         {s.card ? s.card.name : "Not identified"}{" "}
         <span className="dim">{s.card ? `${s.card.set_name} · ${cardLine(s.card)}` : ""}</span>
@@ -189,27 +245,22 @@ function Detail({
         {s.confidence ? ` · ${s.confidence}` : ""}
         {s.rough ? " · rough outline" : ""}
       </div>
-      <div className="row">
-        {finishes.length > 0 && (
-          <select value={finish} onChange={(e) => change(e.target.value, condition)}>
+      {finishes.length > 0 && (
+        <div className="row">
+          <select value={finish} onChange={(e) => change(e.target.value)}>
             {finishes.map((f) => (
               <option key={f.key} value={f.key}>
                 {f.label}
               </option>
             ))}
           </select>
-        )}
-        <select value={condition} onChange={(e) => change(finish, e.target.value)}>
-          {CONDITIONS.map((c) => (
-            <option key={c}>{c}</option>
-          ))}
-        </select>
-      </div>
+        </div>
+      )}
       <div className="row">
         <button
           className="primary"
           disabled={!s.card_id || s.status === "added"}
-          onClick={() => update(s.id, { status: "added", finish: finish || undefined, condition }, "Added")}
+          onClick={() => decide(s.id, { status: "added", finish: finish || undefined }, "Added")}
         >
           {s.status === "added" ? "Added" : "Add"}
         </button>
@@ -222,7 +273,7 @@ function Detail({
           <button
             className="danger"
             disabled={s.status === "rejected"}
-            onClick={() => update(s.id, { status: "rejected" }, "Marked not a card")}
+            onClick={() => decide(s.id, { status: "rejected" }, "Marked not a card")}
           >
             Not a card
           </button>
@@ -247,12 +298,7 @@ function Detail({
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <select value={game} onChange={(e) => setGame(e.target.value)}>
-          <option value="">Any game</option>
-          <option value="mtg">Magic</option>
-          <option value="pkm">Pokémon</option>
-          <option value="pkj">Pokémon JP</option>
-        </select>
+        <GameSelect value={game} onChange={setGame} allLabel="Any game" />
       </div>
       <div className="opts">
         {results.map((c) => (
