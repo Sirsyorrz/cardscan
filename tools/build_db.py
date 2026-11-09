@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Build data/cards.db from Scryfall (MTG), TCGdex (English and Japanese Pokemon), tcgcsv (TCGplayer prices) and Card Kingdom."""
+"""Build data/cards.db from Scryfall (MTG), TCGdex (English and Japanese Pokemon), Lorcast (Lorcana), tcgcsv (TCGplayer
+prices) and Card Kingdom."""
 
 import gzip
 import json
@@ -18,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 CACHE = ROOT / "cache"
 OUT = ROOT.parent / "data" / "cards.db"
-UA = "CardScan-builder/0.1 (https://github.com/Sirsyorrz/cardscan)"
+UA = "CardScan-builder/0.1 (+https://github.com/Sirsyorrz/cardscan)"
 MAX_AGE = 20 * 3600
 TCGDEX_ASSETS = "https://assets.tcgdex.net/"
 
@@ -157,6 +158,7 @@ def schema(db):
           colors TEXT,
           power TEXT,
           toughness TEXT,
+          -- HP on Pokemon, lore on Lorcana
           hp INTEGER,
           artist TEXT,
           released TEXT,
@@ -395,9 +397,10 @@ def pick_subtype(kind, stamps, available):
 
 TCG_POKEMON = 3
 TCG_POKEMON_JAPAN = 85
+TCG_LORCANA = 71
 
 
-def tcgcsv_pokemon(category=TCG_POKEMON):
+def tcgcsv(category=TCG_POKEMON):
     groups_file = "tcgcsv/groups.json" if category == TCG_POKEMON else f"tcgcsv/groups-{category}.json"
     groups = cached_json(groups_file, f"https://tcgcsv.com/tcgplayer/{category}/groups")["results"]
 
@@ -431,7 +434,7 @@ def build_pokemon(db):
     set_info, details = tcgdex_cards("en", exclude_series={"tcgp"})
     set_details = list(set_info.values())
 
-    groups, product_group, group_numbers, prices = tcgcsv_pokemon()
+    groups, product_group, group_numbers, prices = tcgcsv()
 
     # Derive tcgdex set -> TCGplayer group from cards that carry a TCGplayer product id.
     set_group_votes = defaultdict(Counter)
@@ -596,7 +599,9 @@ def product_finish(name):
 def product_card_name(name):
     """"Charizard ex - 006/165 (Poke Ball Pattern)" -> "Charizard ex"."""
     m = re.match(r"^(.*?)\s+-\s+\S*\d", name)
-    return (m.group(1) if m else re.sub(r"\s*\([^)]*\)\s*$", "", name)).strip()
+    name = (m.group(1) if m else re.sub(r"\s*\([^)]*\)\s*$", "", name)).strip()
+    # TCGplayer spells the gender symbols out ("Nidoran F"); the cards and every other source print them
+    return re.sub(r"\bNidoran ([FM])\b", lambda m: "Nidoran " + ("♀" if m[1] == "F" else "♂"), name)
 
 
 # TCGdex sets whose TCGplayer Japan group has no (or a different) abbreviation, by group name.
@@ -628,7 +633,7 @@ JA_GROUP_ALIASES = {
 
 def build_pokemon_ja(db):
     set_info, details = tcgdex_cards("ja")
-    groups, product_group, group_numbers, prices = tcgcsv_pokemon(TCG_POKEMON_JAPAN)
+    groups, product_group, group_numbers, prices = tcgcsv(TCG_POKEMON_JAPAN)
     group_size = {gid: sum(len(ps) for ps in nums.values()) for gid, nums in group_numbers.items()}
     by_name = {g["name"]: g for g in groups}
     by_code = defaultdict(list)
@@ -806,6 +811,122 @@ def save_pokemon(db, label, cards, texts, plist, names, variant_rows, matched, s
     print(f"{label}: {len(cards)} cards, {matched} linked to TCGplayer, {len(plist)} prices")
 
 
+LORCAST = "https://api.lorcast.com/v0"
+LOR_CORE, LOR_INFINITY = 1, 2
+LOR_BASE_RARITIES = {"Common", "Uncommon", "Rare", "Super_rare", "Legendary"}
+# TCGplayer sub-types: Cold Foil is the regular foil, Holofoil the Enchanted and other foil-only prints
+LOR_SUBTYPES = {"normal": ["Normal"], "foil": ["Cold Foil", "Holofoil"]}
+LOR_LABEL = {"normal": "Normal", "foil": "Foil"}
+LOR_FOIL_ONLY = {"Enchanted", "Epic", "Iconic"}
+
+
+def lorcana_total(cards):
+    """The printed "/204": the run of base-rarity numbers from 1. Enchanted, Epic and Iconic cards are numbered past it."""
+    base = {number_sort(c["collector_number"]) for c in cards if c["rarity"] in LOR_BASE_RARITIES and lorcana_numbered(c)}
+    n = 0
+    while n + 1 in base:
+        n += 1
+    return n
+
+
+def lorcana_numbered(c):
+    """A plain collector number. Into the Inklands prints one card five ways as 4a to 4e; the first takes the slot."""
+    return re.fullmatch(r"\d+a?", c["collector_number"]) is not None
+
+
+def build_lorcana(db):
+    lorcast_sets = cached_json("lorcast/sets.json", f"{LORCAST}/sets", 7 * 86400)["results"]
+
+    loaded = []
+    for s in lorcast_sets:
+        loaded.append((s, cached_json(f"lorcast/{s['id']}.json", f"{LORCAST}/sets/{s['id']}/cards", 3 * 86400)))
+        # Lorcast asks for no more than 10 requests a second
+        time.sleep(0.1)
+    groups, product_group, group_numbers, prices = tcgcsv(TCG_LORCANA)
+    product = {p["productId"]: p for nums in group_numbers.values() for ps in nums.values() for p in ps}
+
+    set_group_votes = defaultdict(Counter)
+    for s, cards in loaded:
+        for c in cards:
+            if c.get("tcgplayer_id") in product_group:
+                set_group_votes[s["id"]][product_group[c["tcgplayer_id"]]] += 1
+    set_group = {sid: votes.most_common(1)[0][0] for sid, votes in set_group_votes.items()}
+
+    rows, texts, plist, names, variant_rows, slot_entries, sets = [], {}, [], set(), [], [], {}
+    matched = 0
+    for s, cards in loaded:
+        # kept as Lorcast spells it ("cp", "D23"): its card pages use it
+        code = s["code"]
+        set_id = f"lor-{code}"
+        total = lorcana_total(cards)
+        main = code.isdigit()
+        sets[set_id] = (set_id, "lor", "en", code, s["name"], s.get("released_at"), "main" if main else "extra",
+                        None if main else "Promo", None)
+        for c in cards:
+            name = f"{c['name']} - {c['version']}" if c.get("version") else c["name"]
+            number = c["collector_number"]
+            pid = c.get("tcgplayer_id")
+            gid = set_group.get(s["id"])
+            if not pid and gid:
+                key = number.lstrip("0").upper() or "0"
+                hits = [p for p in group_numbers[gid].get(key, []) if norm(c["name"]) in norm(p["name"])]
+                pid = hits[0]["productId"] if hits else None
+            if pid in product_group:
+                matched += 1
+            offered = prices.get(pid, {})
+            printed = next((e["value"] for e in (product.get(pid) or {}).get("extendedData", []) if e["name"] == "Number"), "")
+            printed_total = printed.split("/")[1] if "/" in printed else str(total or "")
+
+            lorcast_usd = {"normal": (c.get("prices") or {}).get("usd"), "foil": (c.get("prices") or {}).get("usd_foil")}
+            sub_of = {k: next((x for x in subs if x in offered), None) for k, subs in LOR_SUBTYPES.items()}
+            finishes = [k for k in LOR_SUBTYPES if sub_of[k] or lorcast_usd[k]]
+            if not finishes:
+                finishes = ["foil"] if c["rarity"] in LOR_FOIL_ONLY else ["normal", "foil"]
+            for i, key in enumerate(finishes):
+                sub = sub_of[key]
+                variant_rows.append((c["id"], key, LOR_LABEL[key], key, pid if sub else None,
+                                     product_group.get(pid) if sub else None, sub, i))
+                usd = (offered.get(sub) if sub else None) or lorcast_usd[key]
+                if usd:
+                    plist.append((c["id"], key, "tcg", float(usd)))
+            inks = c.get("inks") or ([c["ink"]] if c.get("ink") else [])
+
+            if c.get("text"):
+                texts[c["id"]] = c["text"]
+            legalities = c.get("legalities") or {}
+            # Infinity allows everything not banned; Lorcast leaves it out on its newest cards
+            legal = (LOR_CORE if legalities.get("core") == "legal" else 0) | (LOR_INFINITY if legalities.get("infinity", "legal") == "legal" else 0)
+            image = ((c.get("image_uris") or {}).get("digital") or {}).get("normal")
+            base = main and c["rarity"] in LOR_BASE_RARITIES and lorcana_numbered(c) and number_sort(number) <= total
+            slot_entries.append((c["id"], set_id, name, number, number_sort(number), base))
+            rows.append((
+                c["id"], "lor", name, norm(name), code, s["name"],
+                number, number_sort(number), printed_total,
+                c["rarity"].replace("_", " "), " · ".join([*(c.get("type") or []), *(c.get("classifications") or [])]),
+                None if c.get("cost") is None else str(c["cost"]), c.get("cost"), ",".join(inks),
+                None if c.get("strength") is None else str(c["strength"]),
+                None if c.get("willpower") is None else str(c["willpower"]), c.get("lore"),
+                " / ".join(c.get("illustrators") or []) or None, c.get("released_at") or s.get("released_at"),
+                # the file name after .../card/digital/<size>/; review.py puts the size back in
+                image and image.rsplit("/", 1)[1], ",".join(finishes),
+                c["id"] if c.get("text") else None, pid, product_group.get(pid, gid), None, 0, "en", None, None,
+                legal, play_id(("lor", name)), None, set_id,
+            ))
+            names.add((norm(name), name, "lor"))
+            # the name line alone ("OWL") when the version under it doesn't read; the number then picks the version
+            names.add((norm(c["name"]), name, "lor"))
+
+    slots = assign_slots(slot_entries)
+    rows = [(*row, slots.get(row[0])) for row in rows]
+    db.executemany(f"INSERT OR REPLACE INTO cards VALUES ({','.join('?' * CARD_COLS)})", rows)
+    db.executemany("INSERT OR REPLACE INTO sets (id, game, lang, code, name, released, kind, series, icon) VALUES (?,?,?,?,?,?,?,?,?)", sets.values())
+    db.executemany("INSERT OR REPLACE INTO texts VALUES (?,?)", texts.items())
+    db.executemany("INSERT OR REPLACE INTO base_prices VALUES (?,?,?,?)", plist)
+    db.executemany("INSERT INTO ocr_names VALUES (?,?,?)", names)
+    db.executemany("INSERT OR REPLACE INTO variants VALUES (?,?,?,?,?,?,?,?)", variant_rows)
+    print(f"lorcana: {len(rows)} cards, {matched} linked to TCGplayer, {len(plist)} prices, {len(sets)} sets")
+
+
 def tcgdex_cards(lang, exclude_series=()):
     """Every card of every set TCGdex has in `lang`, with full details. Returns (sets by id, card details)."""
     folder = "tcgdex" if lang == "en" else f"tcgdex-{lang}"
@@ -844,6 +965,7 @@ def main():
     build_mtg(db)
     build_pokemon(db)
     build_pokemon_ja(db)
+    build_lorcana(db)
     db.executescript(
         """
         CREATE INDEX cards_name ON cards(name_norm);

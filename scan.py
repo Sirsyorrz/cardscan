@@ -5,7 +5,7 @@
     python scan.py clip.mkv --no-db --out /tmp/caps   # replay a recording without touching the collection
 
 With --control (used by the desktop app) it reads commands from stdin ("mode foil", "quit") and reports on stdout
-as JSON lines; --preview writes the annotated feed to a JPEG a few times a second instead of opening a window.
+as JSON lines; --preview writes the annotated feed to a JPEG at up to 30 fps instead of opening a window.
 
 Every capture goes into data/collection.db (see collection.py) and its image into captures/<session>/, with
 sheet.jpg and session.json beside them. A capture that names the same card as the one before is a repeat (the card
@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 import traceback
+from collections import deque
 from dataclasses import asdict
 from pathlib import Path
 
@@ -29,21 +30,26 @@ import numpy as np
 
 # OpenCV's bundled Qt has no Wayland plugin and no fonts; run it under XWayland with the system's fonts. Set after
 # importing cv2, which points the font directory at its own empty folder; Qt only reads it when a window opens.
-os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
-os.environ["QT_QPA_FONTDIR"] = "/usr/share/fonts/TTF"
+if sys.platform == "linux":
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+    os.environ["QT_QPA_FONTDIR"] = "/usr/share/fonts/TTF"
 
 import collection
-from detect import detect, portrait, warp
+from detect import detect, warp
 from identify import RANK, Identifier, Result, upright
-from watch import Watcher
+from watch import Watcher, refine
+
+
+def is_camera(src):
+    return src.removeprefix("/dev/video").isdigit()
 
 
 def open_source(src, size):
-    # OpenCV's V4L2 backend only opens devices by index
+    # OpenCV's V4L2 backend only opens devices by index; on Windows the index is DirectShow's (cameras.py)
     index = src.removeprefix("/dev/video")
     if not index.isdigit():
         return cv2.VideoCapture(src)
-    cap = cv2.VideoCapture(int(index), cv2.CAP_V4L2)
+    cap = cv2.VideoCapture(int(index), cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_V4L2)
     # without asking, UVC cameras (the Pixel's webcam mode included) come up as 640x480 raw
     w, h = (int(v) for v in size.split("x"))
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -52,6 +58,47 @@ def open_source(src, size):
     # keep only the newest frame so a slow detection pass doesn't build up lag
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     return cap
+
+
+class Grabber:
+    """Reads a camera on its own thread and hands each frame to `on_frame` (recording, preview) as it arrives,
+    so the feed keeps moving while a detection pass runs. The scan loop takes the newest frame and skips the rest."""
+
+    def __init__(self, cap, on_frame):
+        self.cap = cap
+        self.on_frame = on_frame
+        self.cond = threading.Condition()
+        self.frame = None
+        self.seq = self.taken = 0
+        self.done = False
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        while not self.done:
+            ok, frame = self.cap.read()
+            if not ok:
+                break
+            self.on_frame(frame)
+            with self.cond:
+                self.frame, self.seq = frame, self.seq + 1
+                self.cond.notify()
+        with self.cond:
+            self.done = True
+            self.cond.notify()
+
+    def read(self, timeout=0.5):
+        """(ok, frame): ok is False once the camera is gone; frame is None if nothing new came in time."""
+        with self.cond:
+            self.cond.wait_for(lambda: self.seq != self.taken or self.done, timeout)
+            if self.seq == self.taken:
+                return not self.done, None
+            self.taken = self.seq
+            return True, self.frame
+
+    def stop(self):
+        self.done = True
+        self.thread.join(timeout=2)
 
 
 def contact_sheet(entries, out, cols=8, width=200):
@@ -98,59 +145,83 @@ def draw_mode(view, mode):
     cv2.putText(view, f"{collection.MODES[mode]} [F]", (x + 10, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
 
 
-def recrop(c):
-    """The card inside a rough capture's region, at the frame's full resolution. A rough region can cover the
-    whole tray floor when the change mask spreads (a shadow, a nudged tray), leaving the card small in the warp."""
-    x0, y0 = np.floor(c.quad.min(axis=0)).astype(int).clip(0)
-    x1, y1 = np.ceil(c.quad.max(axis=0)).astype(int)
+def recrops(c, pad=1.4):
+    """Warps of the card found again around its outline, at the frame's full resolution. An outline that snapped to
+    a line inside the card (the bottom of the name bar, the art box) cuts off the name; a rough one can cover the
+    whole tray floor when the change mask spreads (a shadow, a nudged tray). The edge fitter runs on an upright
+    crop `pad` times the outline and on the plain box around it; each finds the card where the other misses."""
+    out = []
+    if not c.rough:
+        quad, rough = refine(c.frame, cv2.minAreaRect(c.quad.astype(np.float32)), pad)
+        if not rough:
+            out.append(warp(c.frame, quad))
+    centre = c.quad.mean(axis=0)
+    region = c.quad if c.rough else centre + (c.quad - centre) * pad
+    h, w = c.frame.shape[:2]
+    x0, y0 = np.floor(region.min(axis=0)).astype(int).clip(0)
+    x1, y1 = np.ceil(region.max(axis=0)).astype(int).clip(max=(w, h))
     crop = c.frame[y0:y1, x0:x1]
-    if crop.size == 0:
-        return None
-    quad = detect(crop, min_frac=0.2, expand_range=0.05)
-    if quad is None:
-        return None
-    return warp(c.frame, portrait(quad + (x0, y0)))
+    quad = detect(crop, min_frac=0.2 if c.rough else 0.35, expand_range=0.05) if crop.size else None
+    if quad is not None:
+        out.append(warp(c.frame, quad + (x0, y0)))
+    return out
+
+
+def read_score(r):
+    return bool(r.id), r.by_number, RANK.get(r.confidence, 0)
+
+
+ORIENTATION_KEY = "cards_upside_down"
+# surely read cards before a session's own orientation overrides the guess the unsure ones were read with
+SURE_ORIENTATION = 3
 
 
 class Session:
     """Identifies captures on a worker thread, in order, so the camera loop never waits on OCR."""
 
-    def __init__(self, out, fps, db=None, session_id=None):
+    def __init__(self, out, db=None, session_id=None):
         self.out = out
-        self.fps = fps
         self.db = db
         self.session_id = session_id
         self.entries = []
         self.last = None
         self.latest = ""
+        # which way up the surely read cards were, relative to the camera; it decides for cards that don't read
+        self.downs = deque(maxlen=15)
+        # until this session has its own, the last session's: the box and the camera rarely move between sessions
+        self.prior_down = bool(db) and collection.get_meta(db, ORIENTATION_KEY) == "down"
+        # (entry, card, assumed upside down, finish mode) for cards that didn't read before the session knew which way is up
+        self.unsure = []
         self.report = None
         self.jobs = queue.Queue()
         self.identifier = Identifier()
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
-    def add(self, capture, mode):
-        """`mode`: the finish toggle as the card landed, not when its turn in the queue comes."""
-        self.jobs.put((capture, mode))
+    def add(self, capture, mode, t):
+        """`mode`: the finish toggle as the card landed, not when its turn in the queue comes. `t`: seconds in."""
+        self.jobs.put((capture, mode, t))
 
     def close(self):
         self.jobs.put(None)
         self.thread.join()
         self.identifier.close()
+        if self.db and self.downs:
+            collection.set_meta(self.db, ORIENTATION_KEY, "down" if self._likely_down() else "up")
         (self.out / "session.json").write_text(json.dumps(self.entries, indent=1, ensure_ascii=False))
         contact_sheet(self.entries, self.out)
 
     def _run(self):
         while (job := self.jobs.get()) is not None:
-            c, mode = job
+            c, mode, t = job
             try:
-                self._process(c, mode)
+                self._process(c, mode, t)
             except Exception:
                 # one bad capture must not stop the session; keep its image so it can be reviewed
                 traceback.print_exc()
                 n = len(self.entries) + 1
                 cv2.imwrite(str(self.out / f"{n:04d}.jpg"), c.card)
-                entry = {"n": n, "t": round(c.frame_no / self.fps, 1), "file": f"{n:04d}.jpg", "rough": c.rough,
+                entry = {"n": n, "t": round(t, 1), "file": f"{n:04d}.jpg", "rough": c.rough,
                          **asdict(Result(None)), "finish": None, "status": "review"}
                 del entry["upside_down"]
                 if self.db:
@@ -160,18 +231,49 @@ class Session:
                     self.report({"event": "card", "status": "review", "n": n, "t": entry["t"], "scan_id": entry.get("scan_id"),
                                  "name": None, "pending": self.jobs.qsize()})
 
-    def _process(self, c, mode):
-        r = self.identifier(c.card)
-        if not r.id and c.frame is not None:
-            found = recrop(c)
-            if found is not None:
-                retry = self.identifier(found)
-                if retry.id:
+    def _likely_down(self):
+        return sum(self.downs) * 2 > len(self.downs) if self.downs else self.prior_down
+
+    def _settle_unsure(self):
+        """Read again the cards that didn't read before the session learned which way up cards lie, if they were
+        taken the other way up; their photos are saved as read, so a wrong guess left them upside down."""
+        down = self._likely_down()
+        for entry, card, assumed, mode in self.unsure:
+            if assumed == down:
+                continue
+            r = self.identifier(card, down)
+            if r.upside_down != down and r.id:
+                continue
+            r.upside_down = down
+            cv2.imwrite(str(self.out / entry["file"]), upright(card, r))
+            if not r.id or RANK[r.confidence] <= RANK.get(entry["confidence"], 0):
+                continue
+            entry.update({k: v for k, v in asdict(r).items() if k != "upside_down"})
+            if r.confidence == "high":
+                entry["status"] = "added"
+            if self.db and entry.get("scan_id"):
+                entry["finish"] = collection.pick_finish(self.db, r.id, mode)
+                collection.update_scan(self.db, entry["scan_id"], card_id=r.id, finish=entry["finish"],
+                                       status=entry["status"], confidence=r.confidence)
+        self.unsure.clear()
+
+    def _process(self, c, mode, t):
+        likely_down = self._likely_down()
+        r = self.identifier(c.card, likely_down)
+        # no collector number usually means the outline cut off the bottom strip it's printed on
+        if not r.by_number and c.frame is not None:
+            for found in recrops(c):
+                retry = self.identifier(found, likely_down)
+                if read_score(retry) > read_score(r):
                     r, c.card = retry, found
+                if r.by_number:
+                    break
+        if r.id and r.confidence == "high":
+            self.downs.append(r.upside_down)
         n = len(self.entries) + 1
         file = f"{n:04d}.jpg"
         cv2.imwrite(str(self.out / file), upright(c.card, r))
-        entry = {"n": n, "t": round(c.frame_no / self.fps, 1), "file": file, "rough": c.rough, **asdict(r)}
+        entry = {"n": n, "t": round(t, 1), "file": file, "rough": c.rough, **asdict(r)}
         del entry["upside_down"]
         entry["finish"] = collection.pick_finish(self.db, r.id, mode) if self.db and r.id else None
         # The same name twice in a row is the same card read again (it slid after landing); a second copy is
@@ -198,6 +300,10 @@ class Session:
         self.entries.append(entry)
         if r.id and status != "repeat":
             self.last = entry
+        if status == "review" and len(self.downs) < SURE_ORIENTATION:
+            self.unsure.append((entry, c.card, r.upside_down, mode))
+        elif self.unsure and len(self.downs) >= SURE_ORIENTATION:
+            self._settle_unsure()
         if status != "repeat":
             self.latest = f"{r.name or '?'} [{r.set_code} {r.number}]" if r.id else "? (review)"
             if not self.report:
@@ -222,7 +328,7 @@ def main():
     ap.add_argument("--record", help="also save the raw feed to this .mkv, for replaying a session")
     ap.add_argument("--mode", choices=list(collection.MODES), help="starting finish (overrides --foil)")
     ap.add_argument("--control", action="store_true", help="JSON lines on stdout, commands on stdin (for the app)")
-    ap.add_argument("--preview", help="write the annotated feed to this JPEG a few times a second")
+    ap.add_argument("--preview", help="write the annotated feed to this JPEG, up to 30 fps")
     args = ap.parse_args()
 
     out_lock = threading.Lock()
@@ -250,7 +356,7 @@ def main():
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
     watcher = Watcher()
-    session = Session(out, fps, db, session_id)
+    session = Session(out, db, session_id)
     if args.control:
         session.report = report
     toggle = {"mode": mode, "quit": False}
@@ -286,33 +392,53 @@ def main():
         print(f"session {session_id}, captures in {out}", flush=True)
     report({"event": "started", "session": session_id, "dir": str(out), "mode": mode})
     started = time.perf_counter()
-    last_preview = 0.0
-    held = None
-    recorder = None
+    # what the scan loop last found, drawn over every frame; held = (quad, until) after a capture
+    overlay = {"quad": None, "held": None, "last_preview": 0.0, "recorder": None}
+
+    def outline_now(frame):
+        held = overlay["held"]
+        return outlined(frame, held if held and time.perf_counter() <= held[1] else None, overlay["quad"])
+
+    def on_frame(frame):
+        if args.record:
+            if overlay["recorder"] is None:
+                h, w = frame.shape[:2]
+                overlay["recorder"] = cv2.VideoWriter(args.record, cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, h))
+            overlay["recorder"].write(frame)
+        now = time.perf_counter()
+        if args.preview and now - overlay["last_preview"] > 0.03:
+            overlay["last_preview"] = now
+            tmp = args.preview + ".tmp.jpg"
+            cv2.imwrite(tmp, outline_now(frame), [cv2.IMWRITE_JPEG_QUALITY, 75])
+            try:
+                os.replace(tmp, args.preview)
+            except PermissionError:
+                pass  # Windows: the review server is reading the last frame; the next one replaces it
+
+    grabber = Grabber(cap, on_frame) if is_camera(args.source) else None
     mouse_set = False
     try:
         while not toggle["quit"]:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if args.record:
-                if recorder is None:
-                    h, w = frame.shape[:2]
-                    recorder = cv2.VideoWriter(args.record, cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, h))
-                recorder.write(frame)
+            if grabber:
+                ok, frame = grabber.read()
+                if frame is None:
+                    if ok:
+                        continue
+                    break
+            else:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                on_frame(frame)
             status = watcher.feed(frame)
+            overlay["quad"] = status.quad
             if status.capture:
-                session.add(status.capture, toggle["mode"])
-                held = (status.capture.quad, watcher.frame_no + round(fps * 0.7))
-            now = time.perf_counter()
-            if args.preview and now - last_preview > 0.12:
-                last_preview = now
-                view = outlined(frame, held if held and watcher.frame_no <= held[1] else None, status.quad)
-                tmp = args.preview + ".tmp.jpg"
-                cv2.imwrite(tmp, view, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                os.replace(tmp, args.preview)
+                # a camera skips frames while detection runs, so its frame count isn't a clock
+                t = time.perf_counter() - started if grabber else status.capture.frame_no / fps
+                session.add(status.capture, toggle["mode"], t)
+                overlay["held"] = (status.capture.quad, time.perf_counter() + 0.7)
             if args.show:
-                view = outlined(frame, held if held and watcher.frame_no <= held[1] else None, status.quad)
+                view = outline_now(frame)
                 added = sum(e["status"] == "added" for e in session.entries)
                 cv2.putText(view, f"{added} cards  {session.latest}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 5)
                 cv2.putText(view, f"{added} cards  {session.latest}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
@@ -328,8 +454,10 @@ def main():
                     next_mode()
     except KeyboardInterrupt:
         pass
-    if recorder is not None:
-        recorder.release()
+    if grabber:
+        grabber.stop()
+    if overlay["recorder"] is not None:
+        overlay["recorder"].release()
     session.close()
     counts = {s: sum(e["status"] == s for e in session.entries) for s in ("added", "review", "repeat")}
     report({"event": "done", **counts, "session": session_id})

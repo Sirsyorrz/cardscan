@@ -48,7 +48,7 @@ def gradients(img):
     return gx, gy, np.sqrt(best)
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _across(gx, gy, mag, x, y, nx, ny):
     """Gradient across the edge at (x, y), counted only when the gradient actually points across it."""
     h, w = mag.shape
@@ -58,7 +58,7 @@ def _across(gx, gy, mag, x, y, nx, ny):
     return a if a > 0.8 * mag[y, x] else 0.0
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _hough(gx, gy, mag, strong, diag):
     """Votes only near each pixel's own gradient direction, which keeps texture from flooding it."""
     h, w = mag.shape
@@ -80,7 +80,7 @@ def _hough(gx, gy, mag, strong, diag):
     return acc
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _peaks(acc, diag, thetas, nms_rho):
     a = np.zeros_like(acc)
     for t in thetas:
@@ -113,7 +113,7 @@ def _peaks(acc, diag, thetas, nms_rho):
     return out_t[:n], out_r[:n]
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _intersect(t1d, r1, t2d, r2):
     t1 = t1d * math.pi / 180
     t2 = t2d * math.pi / 180
@@ -125,12 +125,12 @@ def _intersect(t1d, r1, t2d, r2):
     return True, x, y
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _dist(q, a, b):
     return math.hypot(q[a, 0] - q[b, 0], q[a, 1] - q[b, 1])
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _support(gx, gy, mag, ref, q, a, b, f0, f1, n):
     """Mean edge strength (0..1) across the segment from corner a to b, sampled between f0 and f1."""
     x0 = q[a, 0]
@@ -155,7 +155,7 @@ def _support(gx, gy, mag, ref, q, a, b, f0, f1, n):
     return total / n
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _search(gx, gy, mag, ref, vt, vr, ht, hr, min_frac):
     h, w = mag.shape
     best = np.zeros((4, 2))
@@ -231,12 +231,12 @@ def _search(gx, gy, mag, ref, vt, vr, ht, hr, min_frac):
     return best, best_score
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _centre(q):
     return (q[0, 0] + q[1, 0] + q[2, 0] + q[3, 0]) / 4, (q[0, 1] + q[1, 1] + q[2, 1] + q[3, 1]) / 4
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _continuity(gx, gy, mag, x0, y0, x1, y1, edge_min):
     """Fraction of points along the segment that sit on an edge running parallel to it."""
     dx = x1 - x0
@@ -257,7 +257,7 @@ def _continuity(gx, gy, mag, x0, y0, x1, y1, edge_min):
     return hits / n
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _fit_line(xs, ys, keep):
     n = 0
     cx = 0.0
@@ -283,7 +283,7 @@ def _fit_line(xs, ys, keep):
     return np.array([cx, cy, math.cos(angle), math.sin(angle)])
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _fit_side(gx, gy, mag, q, a, b, edge_min, outermost, reach):
     """Total-least-squares line through the edge points along one side, as (cx, cy, dx, dy);
     an empty array when the side has too few edge points."""
@@ -350,7 +350,7 @@ def _fit_side(gx, gy, mag, q, a, b, edge_min, outermost, reach):
     return line
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _corners(sides):
     out = np.zeros((4, 2))
     for c in range(4):
@@ -365,7 +365,7 @@ def _corners(sides):
     return out, True
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _expand(gx, gy, mag, q, edge_min, beyond0, beyond1, expand_range):
     """A silver or white border on a light background is a much weaker edge than the art box inside it,
     so the search can settle on the art box. Push each side out to the outermost parallel edge that runs
@@ -426,7 +426,7 @@ def _expand(gx, gy, mag, q, edge_min, beyond0, beyond1, expand_range):
     return out, moved
 
 
-@njit(cache=True)
+@njit(cache=True, nogil=True)
 def _refine(gx, gy, mag, q, edge_min, weak_min, outer, max_move):
     """Snap each side to the strongest edge within a few pixels and refit it as a line. Sides `_expand`
     moved out snap to the outermost edge instead, or they'd fall back onto the art box."""
@@ -479,6 +479,28 @@ def detect(img, min_frac=0.3, expand_range=EXPAND_RANGE):
     return quad
 
 
+def outermost(img, min_frac, expand_range=EXPAND_RANGE, width=320):
+    """The largest card outline in a BGR crop of any size, in the crop's pixels, or None.
+
+    `detect`'s edge thresholds are tuned for small images, and its best-scoring box is often a window inside the card
+    (the art box has crisper edges than the card on a white tray), so after each find it is asked again for
+    something larger."""
+    scale = min(1.0, width / img.shape[1])
+    small = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1 else img
+    h, w = small.shape[:2]
+    best = None
+    for _ in range(4):
+        quad = detect(small, min_frac, expand_range)
+        if quad is None:
+            break
+        best = quad
+        side = np.ptp(quad, axis=0) / (w, h)
+        min_frac = float(side.min()) * 1.1
+        if min_frac >= 1:
+            break
+    return None if best is None else best.astype(np.float64) / scale
+
+
 def portrait(quad):
     """Corners reordered so the warp comes out portrait (which way up is left to matching)."""
     top = np.hypot(*(quad[1] - quad[0]))
@@ -488,8 +510,18 @@ def portrait(quad):
     return quad
 
 
+def facing_up(quad):
+    """`portrait(quad)` turned so its top edge is the one nearer the top of the frame. Cards go on the pile the right
+    way up, so this saves the identifier a flip and keeps the capture upright when it can't read the card; the
+    same card also always gets the same corner order."""
+    quad = portrait(quad)
+    if (quad[0, 1] + quad[1, 1]) > (quad[2, 1] + quad[3, 1]):
+        return quad[[2, 3, 0, 1]]
+    return quad
+
+
 def warp(frame, quad, width=630):
     height = round(width * 88 / 63)
     dst = np.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]], np.float32)
-    m = cv2.getPerspectiveTransform(portrait(quad).astype(np.float32), dst)
+    m = cv2.getPerspectiveTransform(facing_up(quad).astype(np.float32), dst)
     return cv2.warpPerspective(frame, m, (width, height), flags=cv2.INTER_AREA)

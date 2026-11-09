@@ -10,7 +10,7 @@ const query = async <T,>(sql: string, params: (string | number)[]) => db.prepare
 function index(game: Game) {
   return buildNameIndex(db.prepare('SELECT norm, name FROM ocr_names WHERE game = ?').all(game) as { norm: string; name: string }[]);
 }
-const indexes = { mtg: index('mtg'), pkm: index('pkm'), pkj: index('pkj') };
+const indexes = { mtg: index('mtg'), pkm: index('pkm'), pkj: index('pkj'), lor: index('lor') };
 
 function lines(...rows: [string, number][]): Line[] {
   return rows.map(([text, y]) => ({ text, x: 0.05, y, w: 0.5, h: 0.03 }));
@@ -31,6 +31,50 @@ test('mtg: name + set code + number pins the printing', async () => {
 test('mtg: OCR typo in the name still matches', async () => {
   const m = await scan('mtg', lines(['Sheo1dred, the Apocalypse', 0.05], ['107/281 M', 0.93], ['DMU EN', 0.95]));
   assert.equal(m?.set_code, 'DMU');
+});
+
+test('mtg: an emblem named after its planeswalker is the emblem, not the card', async () => {
+  const m = await scan('mtg', lines(['CHANDRA, CHILL OF COMPLIANCE', 0.05], ['Emblem', 0.68], ['Whenever you cast a spell, draw a card.', 0.8], ['E 0017', 0.92], ['FRA • EN KIERAN YANNER', 0.95]));
+  assert.equal(m?.name, 'Chandra, Chill of Compliance Emblem');
+  assert.equal(m?.set_code, 'TFRA');
+});
+
+test('pokemon: stage label with its first letter lost', async () => {
+  const m = await scan('pkm', lines(['TAGE2 Talonflame', 0.03], ['Evolves from Fletchinder', 0.06], ['PORIN', 0.93], ['014/088', 0.95]));
+  assert.equal(m?.name, 'Talonflame');
+  assert.equal(m?.set_code, 'POR');
+});
+
+test('pokemon: a misread number with the wrong total falls back to the total', async () => {
+  const m = await scan('pkm', lines(['Lampent', 0.03], ['90 0', 0.04], ['PBLI 0.32/084', 0.95]));
+  assert.equal(m?.set_code, 'PBL');
+  assert.equal(m?.number, '037');
+});
+
+test('mtg: a name none of whose printings have the number/total read is marked contradicted', async () => {
+  const m = await scan('mtg', lines(['ande   ria', 0.03], ['056/084 PMB1 0', 0.1]));
+  assert.equal(m?.contradicted, true);
+  assert.equal(m?.confidence, 'low');
+});
+
+test('pokemon: a total cut off at the edge is no evidence', async () => {
+  const m = await scan('pkm', lines(['BASIC Goldeen', 0.03], ['70', 0.04], ['013/0', 0.95]));
+  assert.notEqual(m?.set_code, 'TK9S');
+});
+
+test('pokemon: set code + number/total with the name cropped beats a Magic set with the same code', async () => {
+  const read = lines(['Evolves Irom Doublade', 0.03], ['POR058/088', 0.95]);
+  const pkm = await scan('pkm', read);
+  assert.equal(pkm?.name, 'Aegislash');
+  assert.equal(pkm?.totalAgrees, true);
+  const mtg = await scan('mtg', read);
+  assert.ok(!mtg || (!mtg.totalAgrees && mtg.confidence === pkm?.confidence));
+});
+
+test('pokemon: a Nidoran is told apart by its number', async () => {
+  const m = await scan('pkm', lines(['BASIC Nidoran♀ HP60', 0.05], ['Find a Friend', 0.6], ['DLR EN 055/103', 0.95]));
+  assert.equal(m?.name, 'Nidoran ♀');
+  assert.equal(m?.set_code, 'DLR');
 });
 
 test('mtg: name only falls back to a printing of that card', async () => {
@@ -214,4 +258,51 @@ test('japanese: english scan mode never returns japanese cards and vice versa', 
   assert.ok(en && !en.id.startsWith('ja-'));
   const ja = await scan('pkj', lines(['リザードンex', 0.05], ['006/165', 0.95]));
   assert.ok(ja?.id.startsWith('ja-'));
+});
+
+test('pokemon jp: rarity read glued onto the total', async () => {
+  const m = await scan('pkj', lines(['たね ヒトデマン', 0.03], ['HP 60', 0.05], ['120/165c', 0.95]));
+  assert.equal(m?.id, 'ja-SV2a-120');
+});
+
+test('pokemon jp: lowercase set code and furigana after the name', async () => {
+  const m = await scan('pkj', lines(['推理セット すい', 0.03], ['グッズ', 0.05], ['sv8', 0.94], ['094/106 U', 0.95]));
+  assert.equal(m?.id, 'ja-SV8-094');
+  assert.equal(m?.confidence, 'high');
+});
+
+test('pokemon jp: deck code without digits tells two decks apart', async () => {
+  const m = await scan('pkj', lines(['サポート', 0.02], ['ナンペジャモ', 0.04], ['svLN', 0.94], ['019/022', 0.95]));
+  assert.equal(m?.id, 'ja-SVLN-019');
+});
+
+test('lorcana: name, version and collector line pin the printing', async () => {
+  const m = await scan('lor', lines(['3', 0.02], ['OWL', 0.55], ['3', 0.555], ['Pirate Lookout', 0.59], ['Storyborn • Ally • Pirate', 0.64], ['Omar Lozano', 0.955], ['1/204 • EN • 6', 0.97]));
+  assert.equal(m?.name, 'Owl - Pirate Lookout');
+  assert.equal(m?.set_code, '6');
+  assert.equal(m?.number, '1');
+  assert.equal(m?.confidence, 'high');
+});
+
+test('lorcana: version unread, the number picks it', async () => {
+  const m = await scan('lor', lines(['TIANA', 0.62], ['Restau#nt 0wn', 0.655], ['16/204·EN·6', 0.97]));
+  assert.equal(m?.name, 'Tiana - Restaurant Owner');
+  assert.equal(m?.set_code, '6');
+});
+
+test('lorcana: an action has no version line', async () => {
+  const m = await scan('lor', lines(['GOOD JOB!', 0.57], ['Action', 0.64], ['Chosen character gets +1 this turn.', 0.75], ['27/204 EN 6', 0.97]));
+  assert.equal(m?.name, 'Good Job!');
+  assert.equal(m?.number, '27');
+});
+
+test('lorcana: collector line alone settles it', async () => {
+  const m = await scan('lor', lines(['205/204 • EN • 6', 0.97]));
+  assert.equal(m?.name, "Chip 'n' Dale - Recovery Rangers");
+  assert.equal(m?.confidence, 'medium');
+});
+
+test('lorcana: name without a number still finds the card', async () => {
+  const m = await scan('lor', lines(['NAVEENS UKULELE', 0.57], ['Item', 0.64]));
+  assert.equal(m?.name, "Naveen's Ukulele");
 });

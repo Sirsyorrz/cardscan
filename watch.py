@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from detect import CARD_ASPECT, detect, portrait, warp
+from detect import CARD_ASPECT, detect, facing_up, outermost, portrait, warp
 
 WORK = 480
 MOTION_DIFF = 18
@@ -30,7 +30,7 @@ class Capture:
     card: np.ndarray
     quad: np.ndarray
     rough: bool
-    # kept for rough captures only, so the identifier can look again for the card inside the rough region
+    # the whole picture, so the identifier can look again around an outline that cut part of the card off
     frame: np.ndarray | None = None
 
 
@@ -133,6 +133,7 @@ def refine(frame, rect, pad):
     # A Magic card's black border has an edge on both sides and either can win. The collector line is printed on
     # the border, so push out to the outer one, but only about a border's width: the detector's default reach
     # jumps on to the edge of the tray floor.
+    rough = facing_up(rough)
     quad = detect(crop, min_frac=0.7 / pad, expand_range=0.05)
     if quad is None:
         return rough, True
@@ -145,7 +146,13 @@ def refine(frame, rect, pad):
     ratio = cv2.contourArea(full) / cv2.contourArea(rough.astype(np.float32))
     if not 0.75 <= ratio <= 1.3:
         return rough, True
-    return full.astype(np.float64), False
+    return facing_up(full.astype(np.float64)), False
+
+
+def _aspect(quad):
+    w = (np.hypot(*(quad[1] - quad[0])) + np.hypot(*(quad[2] - quad[3]))) / 2
+    h = (np.hypot(*(quad[3] - quad[0])) + np.hypot(*(quad[2] - quad[1]))) / 2
+    return min(w, h) / max(w, h)
 
 
 def _changed_share(mask, quad, frame_w):
@@ -167,11 +174,34 @@ def inner_card(frame, quad, mask):
     inner = detect(crop, min_frac=0.2, expand_range=0.05)
     if inner is None:
         return None
-    inner = portrait(inner).astype(np.float64) + (x0, y0)
+    inner = facing_up(inner.astype(np.float64) + (x0, y0))
     if cv2.contourArea(inner.astype(np.float32)) > 0.6 * cv2.contourArea(quad.astype(np.float32)):
+        return None
+    # A card dropped squarely on one from the same set changes only inside its art box (name bar and art, about
+    # 0.82), which then out-changes the card around it. Real outlines measure 0.69 to 0.76.
+    if not 0.67 <= _aspect(inner) <= 0.77:
         return None
     w = frame.shape[1]
     return inner if _changed_share(mask, inner, w) >= _changed_share(mask, quad, w) + 0.15 else None
+
+
+def card_in_region(frame, rect):
+    """A card-shaped outline anywhere inside `rect` (full-frame pixels), or None. The first card on an empty tray
+    drags its shadow into the changed region, which can leave the card too small a part of it for `refine`."""
+    (cx, cy), (rw, rh), angle = rect
+    # padded, so a card filling the region doesn't have its outer edge on the crop's border
+    pts = cv2.boxPoints(((cx, cy), (rw * 1.2, rh * 1.2), angle))
+    h, w = frame.shape[:2]
+    x0, y0 = np.floor(pts.min(axis=0)).astype(int).clip(0)
+    x1, y1 = np.ceil(pts.max(axis=0)).astype(int).clip(max=(w, h))
+    crop = frame[y0:y1, x0:x1]
+    if min(crop.shape[:2]) < 16:
+        return None
+    quad = outermost(crop, min_frac=0.2)
+    if quad is None:
+        return None
+    quad = quad + (x0, y0)
+    return facing_up(quad) if 0.67 <= _aspect(quad) <= 0.77 else None
 
 
 def has_content(card):
@@ -196,7 +226,7 @@ class Watcher:
         self.last_rect = None
         # short sides of recent clean outlines; the card's size in the picture barely changes as the pile grows
         self.sizes = deque(maxlen=9)
-        # first clean outline of this still spell, as (quad, card, frame_no, small); confirmed by a matching one
+        # first clean outline of this still spell, as (quad, card, frame_no, small, frame); confirmed by a matching one
         # on a later frame, or kept anyway if the next card arrives first
         self.pending = None
         self.frame_no = -1
@@ -205,7 +235,10 @@ class Watcher:
     def _fits(self, quad):
         if len(self.sizes) < 3:
             return True
-        return 0.85 <= _short_side(quad) / float(np.median(self.sizes)) <= 1.18
+        return self._card_sized(quad)
+
+    def _card_sized(self, quad):
+        return bool(self.sizes) and 0.85 <= _short_side(quad) / float(np.median(self.sizes)) <= 1.18
 
     def _motion(self, g):
         """Share of moving pixels around the pile, so a hand reaching in at the edge of the picture for the
@@ -224,7 +257,7 @@ class Watcher:
         if not rough:
             self.sizes.append(_short_side(quad))
         self.last_rect = cv2.minAreaRect(quad.astype(np.float32))
-        return Capture(frame_no, card, quad, rough, frame if rough else None)
+        return Capture(frame_no, card, quad, rough, frame)
 
     def feed(self, frame):
         self.frame_w = frame.shape[1]
@@ -234,7 +267,7 @@ class Watcher:
         moving = self.prev is not None and self._motion(g) > self.move_frac
         self.prev = g
         if moving:
-            capture = self._commit(*self.pending, rough=False) if self.armed and self.pending else None
+            capture = self._commit(*self.pending[:4], rough=False, frame=self.pending[4]) if self.armed and self.pending else None
             self.still = 0
             self.tries = 0
             self.armed = self.ref is not None
@@ -273,10 +306,15 @@ class Watcher:
         clean, unfit, rough = [], [], []
         for rect, pad, rough_ok in candidates:
             quad, is_rough = refine(frame, rect, pad)
-            if not rough_ok and (is_rough or _changed_share(mask, quad, frame.shape[1]) < 0.6):
+            if not rough_ok and is_rough:
+                quad, is_rough = card_in_region(frame, rect), False
+                if quad is None:
+                    continue
+            if not rough_ok and _changed_share(mask, quad, frame.shape[1]) < 0.6:
                 # a fallback outline that's mostly unchanged is the tray's pocket around the card, not the card
                 continue
-            if not is_rough:
+            # an outline the size of the cards so far is a card, not the tray floor with one inside it
+            if not is_rough and not self._card_sized(quad):
                 inner = inner_card(frame, quad, mask)
                 if inner is not None:
                     quad = inner
@@ -293,14 +331,14 @@ class Watcher:
         if clean:
             quad, card = clean[0]
             if self.pending is None or np.abs(quad - self.pending[0]).max() > 0.015 * _short_side(quad):
-                self.pending = (quad, card, self.frame_no, small)
+                self.pending = (quad, card, self.frame_no, small, frame)
                 return Status(moving=False, quad=quad)
-            return Status(moving=False, quad=quad, capture=self._commit(quad, card, self.frame_no, small, False))
+            return Status(moving=False, quad=quad, capture=self._commit(quad, card, self.frame_no, small, False, frame))
         if self.tries < ROUGH_AFTER:
             return Status(moving=False)
         # after a few tries a clean outline of a new size wins over a rough one: the camera may have moved
         if unfit:
-            return Status(moving=False, capture=self._commit(*unfit[0], self.frame_no, small, False))
+            return Status(moving=False, capture=self._commit(*unfit[0], self.frame_no, small, False, frame))
         if rough:
             return Status(moving=False, capture=self._commit(*rough[0], self.frame_no, small, True, frame))
         self.ref, self.armed = small, False

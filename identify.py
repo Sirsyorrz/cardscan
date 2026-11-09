@@ -2,6 +2,8 @@
 
 Only the top strip (name) and bottom strip (collector number, set code) are read: the rest of the card adds little
 for matching and costs time. The top strip is read both ways up, and whichever way gives a known card name is up.
+Lorcana names sit mid-card, so that strip is read too when the top and bottom don't settle the card, and Lorcana
+locations (printed sideways) get their collector line read turned a quarter either way.
 """
 
 import json
@@ -26,6 +28,8 @@ HERE = Path(__file__).resolve().parent
 # the looser one catches cards that sit a little off in the warp (name clipped at the top, collector line pushed up),
 # at a cost to clean cards, so it's only a second try. The collector line is the smallest print on the card.
 PASSES = ((0.11, 0.9, 2), (0.16, 0.88, 3))
+# Lorcana prints the name across the middle of the card, under the art, and nothing readable at the top.
+MID = (0.45, 0.75)
 RANK = {"high": 3, "medium": 2, "low": 1}
 
 
@@ -91,7 +95,7 @@ def _join_rows(lines):
 
 
 class Identifier:
-    def __init__(self, games=("mtg", "pkm", "pkj")):
+    def __init__(self, games=("mtg", "pkm", "pkj", "lor")):
         self.games = list(games)
         self.cards = sqlite3.connect(f"file:{HERE / 'data' / 'cards.db'}?mode=ro", uri=True, check_same_thread=False)
         self.cards.row_factory = sqlite3.Row
@@ -99,6 +103,10 @@ class Identifier:
             "Global.log_level": "error",
             "Global.use_cls": False,
             "EngineConfig.onnxruntime.use_cuda": True,
+            # The default scales every image up to a 736 px short side, which blows a strip under 100 px tall up
+            # several times over and loses the collector number on many cards.
+            "Det.limit_type": "min",
+            "Det.limit_side_len": 320,
         })
         self.node = subprocess.Popen(
             ["node", str(HERE / "matcher/matcher.ts")],
@@ -109,16 +117,19 @@ class Identifier:
         self.node.stdin.close()
         self.node.wait()
 
-    def _match(self, reads):
-        self.node.stdin.write(json.dumps({"reads": reads, "games": self.games}) + "\n")
+    def _match(self, reads, games=None):
+        self.node.stdin.write(json.dumps({"reads": reads, "games": games or self.games}) + "\n")
         self.node.stdin.flush()
         return json.loads(self.node.stdout.readline())
 
-    def __call__(self, card):
-        best = Result(None)
+    def __call__(self, card, likely_down=False):
+        """`likely_down`: which way up to assume when no name reads either way, from the session's cards so far."""
+        best = Result(None, upside_down=likely_down)
         upside_down = None
+        # the middle strip doesn't depend on the pass, so it's read at most once each way up
+        mid = {}
         for top_end, bottom_start, zoom in PASSES:
-            r = self._read(card, top_end, bottom_start, zoom, upside_down)
+            r = self._read(card, top_end, bottom_start, zoom, upside_down, likely_down, mid)
             # a low-confidence guess may come from the wrong way up; let the looser pass decide again
             if r.id and r.confidence != "low" and upside_down is None:
                 upside_down = r.upside_down
@@ -126,6 +137,8 @@ class Identifier:
                 best = r
             if best.confidence == "high":
                 break
+        if not best.id and "lor" in self.games:
+            best = self._sideways(card) or best
         if best.id and not best.by_number:
             self._by_art(card, best)
         return best
@@ -148,24 +161,59 @@ class Identifier:
         if sure and r.confidence == "low":
             r.confidence = "medium"
 
-    def _read(self, card, top_end, bottom_start, zoom, upside_down):
+    def _mid(self, img, key, cache):
+        if key not in cache:
+            cache[key] = _lines(self.ocr, img, *MID, join=True)
+        return cache[key]
+
+    def _sideways(self, card):
+        """A Lorcana location: landscape art warped into a portrait card. Its collector line runs along the bottom
+        once turned, which gives set and number; the name isn't read."""
+        for turn in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE):
+            bottom = _lines(self.ocr, cv2.rotate(card, turn), 0.85, 1, 3)
+            reply = self._match([{"key": "card", "lines": bottom}], ["lor"])
+            m = reply.get("match")
+            if m and m.get("byNumber"):
+                return self._result(reply, False)
+        return None
+
+    def _read(self, card, top_end, bottom_start, zoom, upside_down, likely_down=False, mid=None):
+        mid = {} if mid is None else mid
+        lorcana = "lor" in self.games
         flipped = card[::-1, ::-1]
         if upside_down is None:
             up = _lines(self.ocr, card, 0, top_end, join=True)
             down = _lines(self.ocr, flipped, 0, top_end, join=True)
             # The bottom strip upside down holds the artist's name, which looks as wordy as a card name, so only a
             # name the matcher knows says which way is up.
-            guess = self._match([{"key": "up", "lines": up}, {"key": "down", "lines": down}])
-            upside_down = guess.get("key") == "down"
+            reads = [{"key": "up", "lines": up}, {"key": "down", "lines": down}]
+            # an equally good read either way goes to the first
+            guess = self._match(reads[::-1] if likely_down else reads)
+            if not guess.get("key") and lorcana:
+                # only for Lorcana: mid-card rules text ("create a 2/2") reads as names and numbers of the others
+                reads = [{"key": "up", "lines": up + self._mid(card, "up", mid)},
+                         {"key": "down", "lines": down + self._mid(flipped, "down", mid)}]
+                guess = self._match(reads[::-1] if likely_down else reads, ["lor"])
+            upside_down = guess["key"] == "down" if guess.get("key") else likely_down
             top = down if upside_down else up
         else:
             top = _lines(self.ocr, flipped if upside_down else card, 0, top_end, join=True)
         img = flipped if upside_down else card
         bottom = _lines(self.ocr, img, bottom_start, 1, zoom)
+        way = "down" if upside_down else "up"
         reply = self._match([{"key": "card", "lines": top + bottom}])
-        m = reply.get("match")
-        if not m:
+        rank = lambda r: RANK[r["match"]["confidence"]] if r.get("match") else 0
+        if lorcana and rank(reply) < RANK["high"]:
+            again = self._match([{"key": "card", "lines": top + self._mid(img, way, mid) + bottom}], ["lor"])
+            if rank(again) > rank(reply):
+                reply = again
+        if not reply.get("match"):
             return Result(None, upside_down=upside_down)
+        return self._result(reply, upside_down)
+
+    @staticmethod
+    def _result(reply, upside_down):
+        m = reply["match"]
         return Result(
             id=m["id"], name=m["name"], set_code=m["set_code"], set_name=reply["card"]["set_name"],
             number=m["number"], confidence=m["confidence"], game=reply["game"], upside_down=upside_down,

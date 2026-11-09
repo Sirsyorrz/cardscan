@@ -6,6 +6,7 @@ finish or status moves that one copy. Copies added by hand (the +/- buttons) liv
 
 import json
 import os
+import shutil
 import sqlite3
 import sys
 import time
@@ -67,12 +68,15 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
 # Finish keys: Magic uses Scryfall's nonfoil/foil/etched; Pokemon keys start with normal/holo/reverse and append
-# what makes the print distinct ("reverse:pokeball"), with labels in the cards.db variants table.
-# What the scanner's finish toggle can say about the pile; Magic has no holo/reverse split, so both mean foil.
+# what makes the print distinct ("reverse:pokeball"), with labels in the cards.db variants table; Lorcana has
+# normal/foil.
+# What the scanner's finish toggle can say about the pile; Magic and Lorcana have no holo/reverse split, so both
+# mean foil.
 MODES = {"normal": "Normal", "foil": "Foil / Reverse", "holo": "Holo"}
 PREFER = {
     "mtg": {"normal": ["nonfoil"], "foil": ["foil", "etched"], "holo": ["foil", "etched"]},
     "pkm": {"normal": ["normal", "holo"], "foil": ["reverse", "holo"], "holo": ["holo", "reverse"]},
+    "lor": {"normal": ["normal", "foil"], "foil": ["foil"], "holo": ["foil"]},
 }
 LABELS = {"nonfoil": "Normal", "foil": "Foil", "etched": "Etched foil", "normal": "Normal", "holo": "Holo",
           "reverse": "Reverse holo"}
@@ -159,7 +163,8 @@ def pick_finish(db, card_id, mode="normal"):
 def _bump(db, card_id, finish, condition, delta):
     db.execute(
         """INSERT INTO items (card_id, finish, condition, qty, added_at) VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT (card_id, finish, condition) DO UPDATE SET qty = qty + excluded.qty""",
+           ON CONFLICT (card_id, finish, condition) DO UPDATE SET qty = qty + excluded.qty,
+             added_at = CASE WHEN excluded.qty > 0 THEN excluded.added_at ELSE added_at END""",
         (card_id, finish, condition, delta, now()),
     )
     db.execute("DELETE FROM items WHERE card_id = ? AND finish = ? AND condition = ? AND qty <= 0",
@@ -179,6 +184,23 @@ def start_session(db, source, finish_mode="normal", out=None):
         out = Path(out) if out else CAPTURES / str(session_id)
         db.execute("UPDATE sessions SET dir = ? WHERE id = ?", (str(out.resolve()), session_id))
     return session_id, out
+
+
+def delete_session(db, session_id):
+    """Drop a session, the copies its added captures put in the collection, and its capture folder. Copies added
+    by hand (+1) stay."""
+    row = db.execute("SELECT dir FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    if row is None:
+        raise ValueError("no such session")
+    with db:
+        for s in db.execute("SELECT * FROM scans WHERE session_id = ? AND status = 'added'", (session_id,)).fetchall():
+            _bump(db, s["card_id"], s["finish"], s["condition"], -1)
+        db.execute("DELETE FROM scans WHERE session_id = ?", (session_id,))
+        db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    folder = Path(row["dir"]).resolve() if row["dir"] else None
+    # only folders this app made; a replay's --out could be anywhere
+    if folder and folder.parent == CAPTURES.resolve():
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def add_scan(db, session_id, entry):

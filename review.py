@@ -9,6 +9,8 @@ uses the same JSON API, plus /live: the scanner's preview JPEG (scan.py --previe
 import argparse
 import json
 import os
+import re
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +25,8 @@ PAGE = Path(__file__).resolve().parent / "static" / "review.html"
 CARD_COLS = "id, game, lang, name, local_name, set_code, set_name, number, rarity, image, released"
 _local = threading.local()
 LIVE = {"path": None}
+GAME_SCOPE = {"lor": "game = 'lor'", "mtg": "game = 'mtg'", "pkm": "game = 'pkm' AND lang = 'en'",
+              "pkj": "game = 'pkm' AND lang = 'ja'"}
 
 
 def db():
@@ -32,13 +36,16 @@ def db():
 
 
 def image_url(card, size="small"):
-    """Scryfall's id-based layout for Magic; Pokemon keeps the TCGdex asset path or `tcgplayer/<productId>`."""
+    """Scryfall's id-based layout for Magic; Lorcana keeps Lorcast's file name; Pokemon keeps the TCGdex asset path or
+    `tcgplayer/<productId>`."""
     if card["game"] == "mtg":
         i = card["id"]
         return f"https://cards.scryfall.io/{'small' if size == 'small' else 'normal'}/front/{i[0]}/{i[1]}/{i}.jpg"
     image = card["image"]
     if not image:
         return None
+    if card["game"] == "lor":
+        return f"https://cards.lorcast.io/card/digital/{'small' if size == 'small' else 'large'}/{image}"
     if image.startswith("tcgplayer/"):
         product = image.removeprefix("tcgplayer/")
         return f"https://tcgplayer-cdn.tcgplayer.com/product/{product}_{'200w' if size == 'small' else 'in_1000x1000'}.jpg"
@@ -111,20 +118,57 @@ def options(q):
     return [card_json(r) for r in rows]
 
 
+NUMBER_QUERY = re.compile(r"(?:([a-z][a-z0-9]{1,5}?)\s*)?#?(\d{1,4})[a-z]?(?:\s*/\s*(\d{1,4}))?", re.I)
+# Lorcana sets are numbered, so "6 1", "6-1" or "6 #1" is set 6 card 1
+LOR_NUMBER_QUERY = re.compile(r"(\d{1,2})\s*[-#\s]\s*#?(\d{1,3})[a-z]?")
+
+
 def search(q):
+    """Printings by name, or by set code and collector number ("DLR 44", "dlr044", "44/103"), with their lowest
+    TCGplayer price and the copies owned."""
     text = q.get("q", [""])[0].strip()
     key = norm(text)
     if len(key) < 2:
         return []
     game = q.get("game", [""])[0]
-    scope = {"mtg": "game = 'mtg'", "pkm": "game = 'pkm' AND lang = 'en'", "pkj": "game = 'pkm' AND lang = 'ja'"}.get(game, "1")
-    rows = db().execute(
-        f"""SELECT {CARD_COLS} FROM c.cards
-            WHERE {scope} AND (name_norm LIKE ? OR local_norm LIKE ?)
-            ORDER BY name_norm = ? DESC, name_norm LIKE ? DESC, released DESC LIMIT 80""",
-        (f"%{key}%", f"%{key}%", key, f"{key}%"),
-    ).fetchall()
-    return [card_json(r) for r in rows]
+    scope = GAME_SCOPE.get(game, "1")
+    rows = []
+    if game == "lor" and (m := LOR_NUMBER_QUERY.fullmatch(text)):
+        rows = db().execute(
+            f"SELECT {CARD_COLS} FROM c.cards WHERE {scope} AND set_code = ? AND number_sort = ? ORDER BY number",
+            (m[1], int(m[2])),
+        ).fetchall()
+    elif m := NUMBER_QUERY.fullmatch(text):
+        code, number, total = m.groups()
+        where, args = [scope, "number_sort = ?"], [int(number)]
+        if code:
+            where.append("set_code = ? COLLATE NOCASE")
+            args.append(code)
+        if total:
+            # the printed "/103" is the set's base count; secret rares push `total` past it
+            where.append("set_id IN (SELECT id FROM c.sets WHERE ? IN (base, total))")
+            args.append(int(total))
+        if code or total:
+            rows = db().execute(
+                f"SELECT {CARD_COLS} FROM c.cards WHERE {' AND '.join(where)} ORDER BY released DESC LIMIT 80", args
+            ).fetchall()
+    if not rows:
+        rows = db().execute(
+            f"""SELECT {CARD_COLS} FROM c.cards
+                WHERE {scope} AND (name_norm LIKE ? OR local_norm LIKE ?)
+                ORDER BY name_norm = ? DESC, name_norm LIKE ? DESC, released DESC LIMIT 80""",
+            (f"%{key}%", f"%{key}%", key, f"{key}%"),
+        ).fetchall()
+    ids = [r["id"] for r in rows]
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    held = dict(db().execute(f"SELECT card_id, SUM(qty) FROM items WHERE card_id IN ({marks}) GROUP BY card_id", ids))
+    lowest = {}
+    for (cid, _), v in price_map(ids).items():
+        if v.get("tcg") is not None:
+            lowest[cid] = min(lowest.get(cid, v["tcg"]), v["tcg"])
+    return [{**card_json(r), "usd": lowest.get(r["id"]), "qty": held.get(r["id"], 0)} for r in rows]
 
 
 def finishes(q):
@@ -136,7 +180,9 @@ def items(q):
     sort = {"name": "c.name, c.set_code", "recent": "i.added_at DESC", "set": "c.set_code, c.number_sort"}.get(
         q.get("sort", ["recent"])[0], "i.added_at DESC")
     rows = db().execute(
-        f"""SELECT i.*, {', '.join('c.' + col for col in CARD_COLS.split(', '))} FROM items i
+        f"""SELECT i.*, {', '.join('c.' + col for col in CARD_COLS.split(', '))}, c.number_sort,
+                   (SELECT MAX(x.id) FROM scans x WHERE x.card_id = i.card_id AND x.status = 'added') AS capture_id
+            FROM items i
             JOIN c.cards c ON c.id = i.card_id
             WHERE ? = '' OR c.name_norm LIKE ? OR c.local_norm LIKE ? ORDER BY {sort}""",
         (text, f"%{text}%", f"%{text}%"),
@@ -153,14 +199,144 @@ def items(q):
     return {"items": out, "aud_per_usd": float(rate) if rate else None, "prices_at": collection.get_meta(db(), "prices_at")}
 
 
+MTG_FORMATS = ["standard", "pioneer", "modern", "legacy", "vintage", "pauper", "commander"]
+MTG_RESTRICTED = 1 << 7
+
+
+def legality(game, bits):
+    """cards.legal as [(format, legal, restricted)], bits as in tools/build_db.py."""
+    if game == "mtg":
+        return [{"format": f, "legal": bool(bits >> i & 1), "restricted": f == "vintage" and bool(bits & MTG_RESTRICTED)}
+                for i, f in enumerate(MTG_FORMATS)]
+    if game == "lor":
+        return [{"format": f, "legal": bool(bits & b), "restricted": False} for f, b in (("core", 1), ("infinity", 2))]
+    return [{"format": f, "legal": bool(bits & b), "restricted": False} for f, b in (("standard", 1), ("expanded", 2))]
+
+
+def price_map(ids):
+    """{(card_id, finish): {"tcg": usd, "ck": usd}}: refreshed TCGplayer prices over the cards.db snapshot."""
+    out = {}
+    marks = ",".join("?" * len(ids))
+    for sql in (f"SELECT card_id, finish, source, usd FROM c.base_prices WHERE card_id IN ({marks})",
+                f"SELECT card_id, finish, source, usd FROM prices WHERE card_id IN ({marks})"):
+        for r in db().execute(sql, ids):
+            out.setdefault((r["card_id"], r["finish"]), {})[r["source"]] = r["usd"]
+    return out
+
+
+def links(c):
+    out = []
+    if c["game"] == "mtg":
+        out.append({"label": "Scryfall", "url": f"https://scryfall.com/card/{c['set_id']}/{c['number']}"})
+    if c["game"] == "lor":
+        slug = re.sub(r"[^a-z0-9]+", "-", c["name"].lower().replace("'", "")).strip("-")
+        out.append({"label": "Lorcast", "url": f"https://lorcast.com/cards/{c['set_code']}/{c['number']}/{slug}"})
+    if c["tcg_id"]:
+        out.append({"label": "TCGplayer", "url": f"https://www.tcgplayer.com/product/{c['tcg_id']}"})
+    if c["ck_url"]:
+        out.append({"label": "Card Kingdom", "url": f"https://www.cardkingdom.com/{c['ck_url']}"})
+    return out
+
+
+def card_detail(q):
+    """One printing with its stats, prices per finish, what's owned and scanned of it, and the other printings."""
+    row = db().execute(
+        f"""SELECT c.*, s.series, s.total AS set_total, s.icon AS set_icon, t.body AS text FROM c.cards c
+            LEFT JOIN c.sets s ON s.id = c.set_id LEFT JOIN c.texts t ON t.id = c.text_id WHERE c.id = ?""",
+        (q["id"][0],),
+    ).fetchone()
+    if row is None:
+        raise ValueError("no such card")
+    card = card_json(row)
+    owned = {r["finish"]: dict(r) for r in db().execute(
+        "SELECT finish, SUM(qty) AS qty, MAX(added_at) AS added_at FROM items WHERE card_id = ? GROUP BY finish",
+        (card["id"],))}
+    prices_by = price_map([card["id"]])
+    finishes = [{"key": k, "label": l, **prices_by.get((card["id"], k), {}),
+                 "qty": owned.get(k, {}).get("qty", 0), "added_at": owned.get(k, {}).get("added_at")}
+                for k, l in collection.finishes(db(), card["id"])]
+    scans_of = db().execute(
+        """SELECT id, session_id, status, finish, created_at FROM scans
+           WHERE card_id = ? AND status IN ('added', 'review') ORDER BY created_at DESC""",
+        (card["id"],),
+    ).fetchall()
+    rows = db().execute(
+        f"""SELECT {CARD_COLS}, set_id FROM c.cards WHERE name = ? AND game = ? AND lang = ?
+            ORDER BY released DESC, set_code, number_sort LIMIT 150""",
+        (card["name"], card["game"], card["lang"]),
+    ).fetchall()
+    ids = [r["id"] for r in rows]
+    held = dict(db().execute(f"SELECT card_id, SUM(qty) FROM items WHERE card_id IN ({','.join('?' * len(ids))}) GROUP BY card_id",
+                             ids).fetchall()) if ids else {}
+    all_prices = price_map(ids) if ids else {}
+    printings = []
+    for r in rows:
+        p = card_json(r)
+        p["qty"] = held.get(r["id"], 0)
+        tcg = [v["tcg"] for (cid, _), v in all_prices.items() if cid == r["id"] and "tcg" in v]
+        p["usd"] = min(tcg) if tcg else None
+        printings.append(p)
+    for k in ("name_norm", "local_norm", "text_id", "play_id", "tcg_group", "slot", "number_sort"):
+        card.pop(k, None)
+    card["legal"] = legality(card["game"], card["legal"] or 0)
+    rate = collection.get_meta(db(), "aud_per_usd")
+    return {"card": card, "finishes": finishes, "scans": [dict(s) for s in scans_of], "printings": printings,
+            "links": links(row), "aud_per_usd": float(rate) if rate else None}
+
+
+def binder_sets(q):
+    """Every set of a game with how many of its base slots you own through any printing."""
+    scope = GAME_SCOPE.get(q.get("game", [""])[0], "1")
+    owned = dict(db().execute(
+        """SELECT c.set_id, COUNT(DISTINCT c.slot) FROM items i JOIN c.cards c ON c.id = i.card_id
+           WHERE c.slot IS NOT NULL AND i.qty > 0 GROUP BY c.set_id""").fetchall())
+    copies = dict(db().execute(
+        "SELECT c.set_id, SUM(i.qty) FROM items i JOIN c.cards c ON c.id = i.card_id GROUP BY c.set_id").fetchall())
+    rows = db().execute(f"SELECT * FROM c.sets WHERE {scope} ORDER BY released DESC, name").fetchall()
+    return [{**dict(r), "owned": owned.get(r["id"], 0), "copies": copies.get(r["id"], 0)} for r in rows]
+
+
+def binder(q):
+    """One set's printings in number order with the copies owned, lowest TCGplayer price and binder slot."""
+    set_id = q["id"][0]
+    info = db().execute("SELECT * FROM c.sets WHERE id = ?", (set_id,)).fetchone()
+    if info is None:
+        raise ValueError("no such set")
+    rows = db().execute(
+        f"SELECT {CARD_COLS}, slot FROM c.cards WHERE set_id = ? ORDER BY number_sort, number", (set_id,)
+    ).fetchall()
+    ids = [r["id"] for r in rows]
+    held, lowest, captures = {}, {}, {}
+    if ids:
+        marks = ",".join("?" * len(ids))
+        held = dict(db().execute(
+            f"SELECT card_id, SUM(qty) FROM items WHERE card_id IN ({marks}) GROUP BY card_id", ids).fetchall())
+        captures = dict(db().execute(
+            f"""SELECT card_id, MAX(id) FROM scans WHERE card_id IN ({marks}) AND status = 'added'
+                GROUP BY card_id""", ids).fetchall())
+        for (cid, _), v in price_map(ids).items():
+            if v.get("tcg") is not None:
+                lowest[cid] = min(lowest.get(cid, v["tcg"]), v["tcg"])
+    rate = collection.get_meta(db(), "aud_per_usd")
+    return {"set": dict(info), "aud_per_usd": float(rate) if rate else None,
+            "cards": [{**card_json(r), "qty": held.get(r["id"], 0), "usd": lowest.get(r["id"]),
+                       "capture_id": captures.get(r["id"])} for r in rows]}
+
+
 def post_prices():
     lines = []
     prices.refresh(db(), lines.append)
     return {"log": lines}
 
 
-GET = {"/api/sessions": sessions, "/api/scans": scans, "/api/options": options, "/api/search": search,
-       "/api/finishes": finishes, "/api/items": items}
+def rate(_q):
+    r = collection.get_meta(db(), "aud_per_usd")
+    return {"aud_per_usd": float(r) if r else None}
+
+
+GET = {"/api/rate": rate, "/api/sessions": sessions, "/api/scans": scans, "/api/options": options, "/api/search": search,
+       "/api/finishes": finishes, "/api/items": items, "/api/card": card_detail, "/api/sets": binder_sets,
+       "/api/binder": binder}
 
 
 def post_scan(scan_id, body):
@@ -224,13 +400,17 @@ class Handler(BaseHTTPRequestHandler):
                 except FileNotFoundError:
                     stamp = None
                 if stamp and stamp != seen:
+                    try:
+                        data = path.read_bytes()
+                    except OSError:
+                        # Windows: the scanner is swapping in the next frame
+                        continue
                     seen = stamp
-                    data = path.read_bytes()
                     # the closing boundary goes out with the frame, or browsers hold it until the next one
                     self.wfile.write(b"Content-Type: image/jpeg\r\nContent-Length: " + str(len(data)).encode()
                                      + b"\r\n\r\n" + data + b"\r\n--frame\r\n")
                     self.wfile.flush()
-                time.sleep(0.04)
+                time.sleep(0.01)
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -254,6 +434,9 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            if url.path.startswith("/api/sessions/") and url.path.endswith("/delete"):
+                collection.delete_session(db(), int(url.path.split("/")[3]))
+                return self._send(200, {"ok": True})
             if url.path.startswith("/api/scans/"):
                 return self._send(200, post_scan(int(url.path.rsplit("/", 1)[1]), body))
             if url.path == "/api/items":
@@ -285,9 +468,18 @@ def main():
         parent = os.getppid()
 
         def watch_parent():
-            # a killed or crashed app never gets to stop its server; reparenting means it's gone
-            while os.getppid() == parent:
-                time.sleep(2)
+            # a killed or crashed app never gets to stop its server
+            if sys.platform == "win32":
+                # Windows never reparents an orphan, so wait on the parent's process handle
+                import ctypes
+                synchronize, infinite = 0x00100000, 0xFFFFFFFF
+                handle = ctypes.windll.kernel32.OpenProcess(synchronize, False, parent)
+                if handle:
+                    ctypes.windll.kernel32.WaitForSingleObject(handle, infinite)
+            else:
+                # reparenting means it's gone
+                while os.getppid() == parent:
+                    time.sleep(2)
             os._exit(0)
 
         threading.Thread(target=watch_parent, daemon=True).start()

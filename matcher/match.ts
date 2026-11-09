@@ -2,9 +2,9 @@ import { norm } from './normalize.ts';
 
 export type Line = { text: string; x: number; y: number; w: number; h: number };
 /** What the scanner looks for. 'pkj' is Japanese Pokemon: game 'pkm' with lang 'ja' in the card database. */
-export type Game = 'mtg' | 'pkm' | 'pkj';
+export type Game = 'mtg' | 'pkm' | 'pkj' | 'lor';
 
-export function cardGame(game: Game): 'mtg' | 'pkm' {
+export function cardGame(game: Game): 'mtg' | 'pkm' | 'lor' {
   return game === 'pkj' ? 'pkm' : game;
 }
 
@@ -49,6 +49,10 @@ export type Match = {
   nameUnread?: boolean;
   /** The collector number was read and agrees: the printing is settled, whatever the name confidence. */
   byNumber?: boolean;
+  /** A printed total was read and the card's own total is known and equal: tells apart games sharing a set code. */
+  totalAgrees?: boolean;
+  /** A Magic name whose printings all lack the number/total read: likely stray text off another game's card. */
+  contradicted?: boolean;
 };
 
 export const MAX_CANDIDATES = 80;
@@ -94,11 +98,16 @@ function levenshtein(a: string, b: string, max: number) {
   return prev[b.length];
 }
 
-const PKM_NOISE = /\b(basic|stage\s*[12]?|v?star|vmax|break|level\s*up|evolves\s+from.*|put\s+.*\s+on\s+the.*|trainer|item|supporter|stadium|tool|energy)\b/gi;
+const PKM_NOISE = /\b(basic|s?tage\s*[12il]?|v?star|vmax|break|level\s*up|evolves\s+from.*|put\s+.*\s+on\s+the.*|trainer|item|supporter|stadium|tool|energy)\b/gi;
 // "Energy" is part of the name on energy cards ("Fire Energy", "Jet Energy") and some trainers ("Energy Switch")
-const PKM_NOISE_KEEP_ENERGY = /\b(basic|stage\s*[12]?|v?star|vmax|break|level\s*up|evolves\s+from.*|put\s+.*\s+on\s+the.*|trainer|item|supporter|stadium|tool|special\s+energy)\b/gi;
+const PKM_NOISE_KEEP_ENERGY = /\b(basic|s?tage\s*[12il]?|v?star|vmax|break|level\s*up|evolves\s+from.*|put\s+.*\s+on\s+the.*|trainer|item|supporter|stadium|tool|special\s+energy)\b/gi;
 // Stage and card-type labels; "リザードから進化" (evolves from Charmeleon) names another card.
 const PKJ_NOISE = /\S*から進化|たね|[12１２]\s*進化|進化|グッズ|サポート|スタジアム|ポケモンのどうぐ|トレーナーズ/g;
+
+/** Lorcana names carry no labels on their line, only the odd stray digit from the cost or strength badges. */
+function cleanLorcanaLine(text: string) {
+  return text.replace(/[{}()®©@*•·|]/g, ' ').replace(/^(\d+\s+)+|(\s+\d+)+$/g, '').trim();
+}
 
 /** Strip the furniture OCR picks up around the name line (HP, stage labels, mana symbols). */
 function cleanNameLine(text: string, keepEnergy = false) {
@@ -108,6 +117,8 @@ function cleanNameLine(text: string, keepEnergy = false) {
     .replace(/\b\d+\s*HP\b/gi, ' ')
     .replace(keepEnergy ? PKM_NOISE_KEEP_ENERGY : PKM_NOISE, ' ')
     .replace(PKJ_NOISE, ' ')
+    // furigana over a kanji name is read onto the end of it ("推理セット すい")
+    .replace(/(\S)\s+[ぁ-ゖ]{1,4}(?:\s+[ぁ-ゖ]{1,4})*\s*$/u, '$1')
     .replace(/[{}()®©@*•·|]/g, ' ')
     .replace(/\s\d+$/, '')
     .trim();
@@ -134,14 +145,22 @@ function lookupName(index: NameIndex, n: string): { key: string; exact: boolean 
 
 const SET_CODE_RE = /\b([A-Z0-9]{2,5})\s*[•·*.\-+»]?\s*EN\b/;
 // Japanese promos print the set where the total goes: "001/SV-P".
-const SLASH_NUMBER_RE = /\b([A-Z]{0,4}\d{1,4}[a-z]?)\s*\/\s*([A-Z]{0,4}\d{1,4}|[A-Z]{1,3}-P)\b/;
-// Japanese cards print the bare set code bottom left ("SV2a", "S12a", "SM12a"), with no language tag.
-const PKJ_SET_RE = /\b((?:SV|SM|XY|BW|CP|CS|S|M)\d{1,2}(?:\.\d)?[a-zA-Z+]{0,2})(?![\w/])/g;
+// No word break needed after the total: Japanese cards print the rarity right after it, often read glued ("120/165c").
+const SLASH_NUMBER_RE = /\b([A-Z]{0,4}\d{1,4}[a-z]?)\s*\/\s*([A-Z]{0,4}\d{1,4}(?!\d)|[A-Z]{1,3}-P\b)/;
+// Japanese cards print the bare set code bottom left ("SV2a", "S12a", "SM12a"), with no language tag; Scarlet &
+// Violet era cards print it in lowercase ("sv8", "sv4a") and its decks with letters only ("svLN").
+const PKJ_SET_RE = /\b((?:SV|SM|XY|BW|CP|CS|S|M)\d{1,2}(?:\.\d)?[a-zA-Z+]{0,2}|sv\d{1,2}[a-zA-Z]{0,2}|sv[A-Z]{1,3})(?![\w/])/g;
 // Modern Magic frames print "U 0163" / "0163 U": a rarity letter or zero padding marks it as a collector number.
-// OCR often loses the gap after the letter ("U0163"); the zero padding still marks it.
-const MTG_NUMBER_RE = /^(?:[CURMSLT]\s+(\d{1,4})|[CURMSLT]?(0\d{3})(?:\s+[CURMSLT])?|(\d{1,4})\s+[CURMSLT])$/;
+// OCR often loses the gap after the letter ("U0163"); the zero padding still marks it. Tokens print T, emblems E.
+const MTG_NUMBER_RE = /^(?:[CURMSLTE]\s+(\d{1,4})|[CURMSLTE]?(0\d{3})(?:\s+[CURMSLTE])?|(\d{1,4})\s+[CURMSLTE])$/;
 // Basic energy sets (SVE, MEE) print no total and no type in words: just "SVE EN 002" bottom left.
 const PKM_BARE_NUMBER_RE = /(?:^|EN\s*)(0\d{2})$/;
+// Lorcana prints the set after the language: "1/204 • EN • 6", promos "2/P1 • EN", "4/D23 • EN".
+const LOR_SET_RE = /(?<![A-Z])EN\s*[•·*.,\-+»]?\s*([A-Z]{0,3}\d{1,3})(?!\d)/;
+// Lorcana prints the name across the middle of the card, under the art, with the character's version below it.
+const LOR_NAME_TOP = 0.45;
+const LOR_NAME_BOTTOM = 0.75;
+const inLorcanaName = (l: Line) => l.y >= LOR_NAME_TOP && l.y <= LOR_NAME_BOTTOM;
 
 export function extractClues(lines: Line[], index: NameIndex, game: Game): Clues {
   const sorted = [...lines].sort((a, b) => a.y - b.y);
@@ -152,8 +171,13 @@ export function extractClues(lines: Line[], index: NameIndex, game: Game): Clues
   const bottom = Math.max(...sorted.map((l) => l.y + l.h), top + 0.3);
   const relY = (l: Line) => (l.y - top) / (bottom - top);
 
-  for (const line of sorted) {
+  for (const [i, line] of sorted.entries()) {
     const text = line.text.trim();
+
+    if (game === 'lor') {
+      const set = LOR_SET_RE.exec(text);
+      if (set) clues.setCodes.push(set[1]);
+    }
 
     const set = SET_CODE_RE.exec(text);
     if (set && !/^\d+$/.test(set[1])) {
@@ -168,7 +192,18 @@ export function extractClues(lines: Line[], index: NameIndex, game: Game): Clues
 
     const slash = SLASH_NUMBER_RE.exec(text);
     if (slash) {
-      clues.numbers.push({ number: slash[1], total: slash[2] });
+      // a total shorter than the number was cut off at the card edge ("013/0"): no evidence either way
+      const cut = /^\d+$/.test(slash[2]) && slash[2].length < slash[1].replace(/\D/g, '').length;
+      clues.numbers.push({ number: slash[1], total: cut ? null : slash[2] });
+      // newer Pokemon sets print the code right before the number with no language tag in between, or OCR drops
+      // it: "POR 058/088", "PBLI 0.32/084" (trailing junk from the tag)
+      if (game === 'pkm') {
+        const code = /\b([A-Z]{2,4})(?:\s*EN)?[^A-Za-z]*$/.exec(text.slice(0, slash.index));
+        if (code && code[1] !== 'EN') {
+          clues.setCodes.push(code[1]);
+          if (code[1].length === 4) clues.setCodes.push(code[1].slice(0, 3));
+        }
+      }
       if (/-P$/.test(slash[2])) clues.setCodes.push(slash[2]);
       // the set code read glued to the number: "DLR091/103" (prefixed numbers carry the prefix on the total too)
       const glued = /^([A-Z]{2,4})(\d+)$/.exec(slash[1]);
@@ -191,11 +226,20 @@ export function extractClues(lines: Line[], index: NameIndex, game: Game): Clues
     const bodyNorm = norm(text);
     if (bodyNorm.length >= 8) clues.body.push(bodyNorm);
 
-    // Both games print the name at the top; lower lines are rules text that can contain other card names.
-    if (relY(line) > 0.4) continue;
-
-    // Try the name with "Energy" kept first, so "Energy Switch" doesn't fall back to "Switch"
-    const variants = /energy/i.test(text) ? [cleanNameLine(text, true), cleanNameLine(text)] : [cleanNameLine(text)];
+    let variants: string[];
+    if (game === 'lor') {
+      if (!inLorcanaName(line)) continue;
+      // name and version are two lines ("OWL" over "Pirate Lookout"); the pair is the full name
+      // the next row down, skipping the cost and strength badges beside the name
+      const next = sorted.slice(i + 1).find((l) => inLorcanaName(l) && /\p{L}{3}/u.test(l.text) && l.y - line.y > line.h / 2);
+      const paired = next && next.y - line.y < 0.06;
+      variants = paired ? [cleanLorcanaLine(`${text} ${next.text}`), cleanLorcanaLine(text)] : [cleanLorcanaLine(text)];
+    } else {
+      // Magic and Pokemon print the name at the top; lower lines are rules text that can contain other card names.
+      if (relY(line) > 0.4) continue;
+      // Try the name with "Energy" kept first, so "Energy Switch" doesn't fall back to "Switch"
+      variants = /energy/i.test(text) ? [cleanNameLine(text, true), cleanNameLine(text)] : [cleanNameLine(text)];
+    }
     let hit: ReturnType<typeof lookupName> = null;
     for (const cleaned of variants) {
       const n = norm(cleaned);
@@ -232,18 +276,27 @@ export async function resolveCard(clues: Clues, query: Query, game: Game): Promi
   const nums = clues.numbers.map((n) => ({ ...n, number: stripZeros(n.number) }));
   const scope = gameScope(game);
   const codes = clues.setCodes.map((c) => c.toUpperCase());
-  const inReadSet = (p: Row) => codes.includes(p.set_code.toUpperCase());
+  // a token or emblem prints its main set's code ("FRA"), while it's listed in the token set ("TFRA")
+  const inReadSet = (p: Row) => codes.some((c) => [c, `T${c}`].includes(p.set_code.toUpperCase()));
+  const totalOf = (p: Row) => (p.printed_total ? stripZeros(p.printed_total) : null);
+  const totalAgrees = (p: Row, n: Clues['numbers'][number]) => !!n.total && totalOf(p) === stripZeros(n.total);
+  // a known total that differs means the number (or the game) is wrong; Magic lists no totals
+  const totalFits = (p: Row, n: Clues['numbers'][number]) => !n.total || !totalOf(p) || totalAgrees(p, n);
 
   // Set code + collector number pins an exact printing even when the name OCR is poor.
   for (const code of clues.setCodes) {
     for (const n of nums) {
-      const rows = await query<Row>(
-        `SELECT ${ROW_COLS} FROM cards WHERE set_code = ? COLLATE NOCASE AND (upper(ltrim(number, '0')) = ? OR number = ?) AND ${scope.sql} LIMIT 5`,
-        [code, n.number, n.number, ...scope.params],
-      );
+      const rows = (
+        await query<Row>(
+          `SELECT ${ROW_COLS} FROM cards WHERE set_code = ? COLLATE NOCASE AND (upper(ltrim(number, '0')) = ? OR number = ?) AND ${scope.sql} LIMIT 5`,
+          [code, n.number, n.number, ...scope.params],
+        )
+      ).filter((r) => totalFits(r, n));
       const named = rows.find((r) => clues.names.some((c) => c.name === r.name));
-      if (named) return { ...named, confidence: 'high', byNumber: true };
-      if (rows.length === 1 && !clues.names.length) return { ...rows[0], confidence: 'medium', byNumber: true };
+      if (named) return { ...named, confidence: 'high', byNumber: true, totalAgrees: totalAgrees(named, n) };
+      if (rows.length === 1 && !clues.names.length) {
+        return { ...rows[0], confidence: 'medium', byNumber: true, totalAgrees: totalAgrees(rows[0], n) };
+      }
     }
   }
 
@@ -272,11 +325,32 @@ export async function resolveCard(clues: Clues, query: Query, game: Game): Promi
 
   for (const n of nums) {
     const hits = printings.filter((p) => stripZeros(p.number) === n.number);
-    const withTotal = n.total ? hits.filter((p) => !p.printed_total || stripZeros(p.printed_total) === stripZeros(n.total!)) : hits;
-    const pick = (withTotal.length ? withTotal : hits).find((p) => !codes.length || inReadSet(p)) ?? (withTotal[0] ?? hits[0]);
-    if (pick) return { ...pick, confidence: best.exact ? 'high' : 'medium', byNumber: true };
+    let fits = hits.filter((p) => totalFits(p, n));
+    let sure = best.exact;
+    if (!fits.length && n.total) {
+      // one misread digit in the total ("184" for "194") still backs the number, though less firmly; more than
+      // that and it's the number that was misread ("0.32/084" for 037/084)
+      fits = hits.filter((p) => levenshtein(totalOf(p) ?? '', stripZeros(n.total!), 1) <= 1);
+      sure = false;
+    }
+    const pick = fits.find((p) => !codes.length || inReadSet(p)) ?? fits[0];
+    if (pick) return { ...pick, confidence: sure ? 'high' : 'medium', byNumber: true, totalAgrees: totalAgrees(pick, n) };
   }
 
+  // Number misread but the total came through: it narrows the printings to one set (or a few).
+  const totals = new Set(nums.flatMap((n) => (n.total ? [stripZeros(n.total)] : [])));
+  const byTotal = printings.filter((p) => totals.has(totalOf(p) ?? ''));
+  if (byTotal.length) {
+    const inSet = byTotal.filter(inReadSet);
+    const pool = inSet.length ? inSet : byTotal;
+    if (pool.length === 1) return { ...pool[0], confidence: 'medium', totalAgrees: true };
+    return { ...pool[0], confidence: 'low', candidates: idsOf(pool), totalAgrees: true };
+  }
+
+  // A Magic name with a number/total read that none of its printings have is as likely stray text off a Pokemon
+  // card ("wi  se" from the weakness box upside down). Pokemon numbers are misread too often to hold against a name.
+  const contradicted = game === 'mtg' && nums.some((n) => n.total);
+  const unlessContradicted = (c: Match['confidence']) => (contradicted ? 'low' : c);
   if (codes.length) {
     // Without a number, the main-set printing: showcase, borderless and other variants are numbered after it.
     const bySet = printings
@@ -286,9 +360,10 @@ export async function resolveCard(clues: Clues, query: Query, game: Game): Promi
   }
   const byText = await narrowByText(clues, query, game, best.norm);
   if (byText.length) {
-    return { ...byText[0], confidence: byText.length === 1 ? 'medium' : 'low', textId: byText[0].text_id, candidates: idsOf(byText) };
+    const confidence = unlessContradicted(byText.length === 1 ? 'medium' : 'low');
+    return { ...byText[0], confidence, textId: byText[0].text_id, candidates: idsOf(byText), contradicted };
   }
-  return { ...printings[0], confidence: printings.length === 1 ? 'medium' : 'low', candidates: idsOf(printings) };
+  return { ...printings[0], confidence: unlessContradicted(printings.length === 1 ? 'medium' : 'low'), candidates: idsOf(printings), contradicted };
 }
 
 function idsOf(rows: Row[]) {
@@ -298,10 +373,10 @@ function idsOf(rows: Row[]) {
 /**
  * Name unreadable (glare, foil) but a Pokemon "number/total" came through: the cards printed with it are only
  * candidates, since one misread digit names a different card. The artwork check has to confirm.
- * Magic prints no total on most frames, so a bare number would match half the game.
+ * Lorcana prints "number/total" too. Magic prints no total on most frames, so a bare number would match half the game.
  */
 async function numberOnly(nums: Clues['numbers'], query: Query, game: Game): Promise<Match | null> {
-  if (cardGame(game) !== 'pkm') return null;
+  if (game === 'mtg') return null;
   const scope = gameScope(game);
   const seen = new Map<string, Row>();
   for (const n of nums) {

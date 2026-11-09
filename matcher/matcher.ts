@@ -1,6 +1,6 @@
 // match.ts behind a JSON-lines pipe for identify.py. Request: {"reads": [{"key": "up", "lines": [...]}, ...],
-// "games": ["mtg", "pkm", "pkj"]}, lines in card-relative 0..1 coordinates. Reply: the best match over every read and
-// game, or {"match": null}.
+// "games": ["mtg", "pkm", "pkj", "lor"]}, lines in card-relative 0..1 coordinates. Reply: the best match over every
+// read and game, or {"match": null}.
 import { DatabaseSync } from 'node:sqlite';
 import { createInterface } from 'node:readline';
 
@@ -21,6 +21,12 @@ function index(game: Game) {
 
 const RANK = { high: 3, medium: 2, low: 1 } as const;
 
+// At equal confidence a read name beats a bare number: upside down, the bottom strip's text can pass for a
+// "6/100" while the name strip the right way up only says which card, not which printing.
+// Before that, a read total the card agrees with: games share set codes (Magic's Portal and Pokemon's Perfect
+// Order are both POR), and Magic lists no totals to check.
+const score = (m: Match) => RANK[m.confidence] * 4 + (m.totalAgrees ? 2 : 0) + (m.nameUnread ? 0 : 1) - (m.contradicted ? 2 : 0);
+
 type Request = { reads: { key: string; lines: Line[] }[]; games: Game[] };
 
 async function handle(req: Request) {
@@ -28,7 +34,7 @@ async function handle(req: Request) {
   for (const game of req.games) {
     for (const read of req.reads) {
       const match = await resolveCard(extractClues(read.lines, index(game), game), query, game);
-      if (match && (!best || RANK[match.confidence] > RANK[best.match.confidence])) best = { match, key: read.key, game };
+      if (match && (!best || score(match) > score(best.match))) best = { match, key: read.key, game };
     }
   }
   if (!best) return { match: null };

@@ -24,13 +24,16 @@ MIN_SCORE = 0.45
 
 
 def image_url(card):
-    """Full-size official image: Scryfall's id-based layout for Magic, TCGdex or TCGplayer for Pokémon."""
+    """Full-size official image: Scryfall's id-based layout for Magic, Lorcast for Lorcana, TCGdex or TCGplayer for
+    Pokémon."""
     if card["game"] == "mtg":
         i = card["id"]
         return f"https://cards.scryfall.io/normal/front/{i[0]}/{i[1]}/{i}.jpg"
     image = card["image"]
     if not image:
         return None
+    if card["game"] == "lor":
+        return f"https://cards.lorcast.io/card/digital/normal/{image}"
     if image.startswith("tcgplayer/"):
         return f"https://tcgplayer-cdn.tcgplayer.com/product/{image.removeprefix('tcgplayer/')}_in_1000x1000.jpg"
     return f"https://assets.tcgdex.net/{image}/high.webp"

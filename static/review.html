@@ -90,7 +90,7 @@ function toast(msg) {
   clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.style.display = 'none'), 2500);
 }
 const cardLine = (c) => c ? `${esc(c.set_code)} #${esc(c.number)}${c.lang === 'ja' ? ' JP' : ''}` : '';
-const gameOf = (c) => !c ? '' : c.game === 'mtg' ? 'mtg' : c.lang === 'ja' ? 'pkj' : 'pkm';
+const gameOf = (c) => !c ? '' : c.game === 'pkm' && c.lang === 'ja' ? 'pkj' : c.game;
 
 async function loadSessions() {
   const list = await api('/api/sessions');
@@ -135,10 +135,7 @@ async function openScan(id) {
     <div class="pair"><img src="/capture/${s.id}"><img src="${s.card ? esc(s.card.img_large) : ''}" alt=""></div>
     <h2>${s.card ? esc(s.card.name) : 'Not identified'} <span class="muted">${s.card ? esc(s.card.set_name) + ' · ' + cardLine(s.card) : ''}</span></h2>
     <div class="muted">Capture ${s.n} at ${s.t}s · ${esc(s.status)}${s.confidence ? ' · ' + esc(s.confidence) : ''}${s.rough ? ' · rough outline' : ''}</div>
-    <div class="row">
-      ${fin.length ? `<select id="finish">${fin.map((f) => `<option value="${esc(f.key)}" ${f.key === s.finish ? 'selected' : ''}>${esc(f.label)}</option>`).join('')}</select>` : ''}
-      <select id="condition">${['NM', 'LP', 'MP', 'HP', 'DMG'].map((c) => `<option ${c === s.condition ? 'selected' : ''}>${c}</option>`).join('')}</select>
-    </div>
+    ${fin.length ? `<div class="row"><select id="finish">${fin.map((f) => `<option value="${esc(f.key)}" ${f.key === s.finish ? 'selected' : ''}>${esc(f.label)}</option>`).join('')}</select></div>` : ''}
     <div class="row">
       <button class="primary" id="confirm" ${s.card_id ? '' : 'disabled'}>${s.status === 'added' ? 'Added' : 'Add'} <kbd>Enter</kbd></button>
       <button id="extra" ${s.card_id ? '' : 'disabled'}>+1 copy</button>
@@ -148,24 +145,29 @@ async function openScan(id) {
     <h2>Other printings</h2><div id="opts" class="opts"><span class="muted">Loading</span></div>
     <h2>Search</h2>
     <div class="row"><input id="q" class="grow" placeholder="Card name">
-      <select id="game"><option value="">Any game</option><option value="mtg" ${gameOf(s.card) === 'mtg' ? 'selected' : ''}>Magic</option><option value="pkm" ${gameOf(s.card) === 'pkm' ? 'selected' : ''}>Pokémon</option><option value="pkj" ${gameOf(s.card) === 'pkj' ? 'selected' : ''}>Pokémon JP</option></select></div>
+      <select id="game"><option value="">Any game</option><option value="lor" ${gameOf(s.card) === 'lor' ? 'selected' : ''}>Lorcana</option><option value="mtg" ${gameOf(s.card) === 'mtg' ? 'selected' : ''}>Magic</option><option value="pkm" ${gameOf(s.card) === 'pkm' ? 'selected' : ''}>Pokémon</option><option value="pkj" ${gameOf(s.card) === 'pkj' ? 'selected' : ''}>Pokémon JP</option></select></div>
     <div id="results" class="opts"></div>
-    <p class="muted"><kbd>J</kbd>/<kbd>K</kbd> next/previous, <kbd>/</kbd> search</p>`;
-  const update = async (body, msg) => {
-    try { await api(`/api/scans/${s.id}`, body); toast(msg); await loadScans(); await loadSessions(); openScan(s.id); }
+    <p class="muted"><kbd>←↑↓→</kbd> move, <kbd>/</kbd> search</p>`;
+  // `advance`: a decided card (added, rejected) moves the selection on to the next one
+  const update = async (body, msg, advance = false) => {
+    const shown = visible(), i = shown.findIndex((x) => x.id === s.id);
+    const next = advance ? (shown[i + 1] ?? shown[i - 1]) : null;
+    try {
+      await api(`/api/scans/${s.id}`, body); toast(msg); await loadScans(); await loadSessions();
+      openScan(next ? next.id : s.id);
+      if (next) document.querySelector(`.tile[data-id="${next.id}"]`)?.scrollIntoView({ block: 'nearest' });
+    }
     catch (e) { toast(e.message); }
   };
-  $('#confirm').onclick = () => update({ status: 'added', finish: $('#finish')?.value, condition: $('#condition').value }, 'Added');
-  $('#reject').onclick = () => update({ status: 'rejected' }, 'Rejected');
+  $('#confirm').onclick = () => update({ status: 'added', finish: $('#finish')?.value }, 'Added', true);
+  $('#reject').onclick = () => update({ status: 'rejected' }, 'Rejected', true);
   if ($('#unadd')) $('#unadd').onclick = () => update({ status: 'review' }, 'Removed from the collection');
   $('#extra').onclick = async () => {
-    await api('/api/items', { card_id: s.card_id, finish: $('#finish')?.value || s.finish, condition: $('#condition').value, delta: 1 });
+    await api('/api/items', { card_id: s.card_id, finish: $('#finish')?.value || s.finish, delta: 1 });
     toast('Added another copy');
   };
-  const onFinish = () => s.status === 'added' && update({ finish: $('#finish').value, condition: $('#condition').value }, 'Updated');
-  if ($('#finish')) $('#finish').onchange = onFinish;
-  $('#condition').onchange = onFinish;
-  const choose = (id) => update({ card_id: id, status: 'added' }, 'Changed and added');
+  if ($('#finish')) $('#finish').onchange = () => s.status === 'added' && update({ finish: $('#finish').value }, 'Updated');
+  const choose = (id) => update({ card_id: id, status: 'added' }, 'Changed and added', true);
   const tiles = (cards) => cards.map((c) => `<div class="opt ${c.id === s.card_id ? 'cur' : ''}" data-card="${esc(c.id)}">
       <img loading="lazy" onerror="this.style.visibility='hidden'" src="${esc(c.img || '')}" alt=""><div>${cardLine(c)}</div><div class="muted">${esc(c.name.length > 22 ? c.name.slice(0, 21) + '…' : c.name)}</div></div>`).join('');
   const bind = (el) => el.querySelectorAll('.opt').forEach((o) => (o.onclick = () => choose(o.dataset.card)));
@@ -206,10 +208,10 @@ async function loadItems() {
   const value = rows.reduce((n, r) => n + (r.usd || 0) * r.qty, 0);
   const when = data.prices_at ? `prices ${new Date(Number(data.prices_at)).toLocaleDateString()}` : 'snapshot prices';
   $('#items-total').textContent = `${copies} cards · ${rows.length} entries · ${money(value, rate)} · ${when}`;
-  $('#list').innerHTML = `<table><thead><tr><th></th><th>Card</th><th>Set</th><th>Finish</th><th>Cond.</th><th class="num">Price</th><th class="num">Qty</th></tr></thead><tbody>
+  $('#list').innerHTML = `<table><thead><tr><th></th><th>Card</th><th>Set</th><th>Finish</th><th class="num">Price</th><th class="num">Qty</th></tr></thead><tbody>
     ${rows.map((r, i) => `<tr data-i="${i}"><td><img loading="lazy" onerror="this.style.visibility='hidden'" src="${esc(r.img || '')}"></td>
       <td>${esc(r.name)}${r.local_name ? ` <span class="muted">${esc(r.local_name)}</span>` : ''}</td>
-      <td>${esc(r.set_name)} <span class="muted">${cardLine(r)}</span></td><td>${esc(r.finish_label)}</td><td>${esc(r.condition)}</td>
+      <td>${esc(r.set_name)} <span class="muted">${cardLine(r)}</span></td><td>${esc(r.finish_label)}</td>
       <td class="num">${money(r.usd, rate)}</td>
       <td class="num qty"><button data-d="-1">−</button> ${r.qty} <button data-d="1">+</button></td></tr>`).join('')}
     </tbody></table>`;
@@ -249,8 +251,10 @@ $('#refresh-prices').onclick = async (e) => {
 };
 document.addEventListener('keydown', (e) => {
   if (state.tab !== 'review' || ['INPUT', 'SELECT'].includes(document.activeElement.tagName)) return;
-  if (e.key === 'j') step(1);
-  else if (e.key === 'k') step(-1);
+  const grid = document.querySelector('#list .grid');
+  const cols = grid ? getComputedStyle(grid).gridTemplateColumns.split(' ').length : 1;
+  const move = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: cols, ArrowUp: -cols }[e.key];
+  if (move) { e.preventDefault(); step(move); }
   else if (e.key === 'Enter') $('#confirm')?.click();
   else if (e.key === 'x') $('#reject')?.click();
   else if (e.key === '/') { e.preventDefault(); $('#q')?.focus(); }
