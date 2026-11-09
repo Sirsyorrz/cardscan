@@ -106,6 +106,15 @@ export default function CollectionView() {
     }
   };
 
+  const exportCsv = async () => {
+    try {
+      const r = await api<{ path: string; copies: number }>("/api/export", {});
+      say(`Saved ${r.copies} cards to ${r.path}`);
+    } catch (e) {
+      say(String(e));
+    }
+  };
+
   const adjust = async (i: number, delta: number) => {
     const r = rows[i];
     await api("/api/items", { card_id: r.card_id, finish: r.finish, condition: r.condition, delta });
@@ -146,6 +155,9 @@ export default function CollectionView() {
         </button>
         <button title="Add cards from another app's CSV export" onClick={() => setImporting(true)}>
           Import
+        </button>
+        <button title="Save the collection as a CSV in your Downloads folder" onClick={exportCsv}>
+          Export
         </button>
         <div className="seg">
           <button className={layout === "list" ? "on" : ""} onClick={() => setPrefs({ collectionView: "list" })}>

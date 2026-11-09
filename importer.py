@@ -25,6 +25,8 @@ COLUMNS = {
     "set_name": ["setname", "editionname", "expansion", "expansionname"],
     "number": ["collectornumber", "cardnumber", "number", "cn", "no", "collectorsnumber"],
     "scryfall": ["scryfallid"],
+    # cardscan's own export
+    "card_id": ["cardid"],
     "finish": ["foil", "finish", "printing", "foiling", "variant", "variance"],
     "condition": ["condition", "cond"],
     "lang": ["language", "lang"],
@@ -71,9 +73,9 @@ def read_rows(text):
             if alias in header:
                 where[field] = header.index(alias)
                 break
-    if "name" not in where and "scryfall" not in where:
+    if "name" not in where and "scryfall" not in where and "card_id" not in where:
         raise ValueError("no Name or Scryfall ID column; is this a collection CSV?")
-    source = "ManaBox" if "manaboxid" in header else "CSV"
+    source = "ManaBox" if "manaboxid" in header else "cardscan" if "cardid" in header else "CSV"
     rows = []
     for line, values in enumerate(reader, start=2):
         if not any(v.strip() for v in values):
@@ -123,6 +125,10 @@ def same_number(a, b):
 
 
 def find_card(cards, row, game_hint):
+    if row.get("card_id"):
+        card = cards.by_id(row["card_id"])
+        if card:
+            return card, None
     if row.get("scryfall"):
         card = cards.by_id(row["scryfall"].lower())
         if card:
@@ -177,6 +183,8 @@ def finish_kind(raw):
 def pick(db, card, raw_finish):
     kind = finish_kind(raw_finish)
     keys = [k for k, _ in collection.finishes(db, card["id"])]
+    if raw_finish in keys:
+        return raw_finish
     want = PLAIN_KEY.get(card["game"], "normal") if kind == "plain" else kind
     for k in keys:
         if k == want:

@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import collection
+import exporter
 import importer
 import prices
 from collection import norm
@@ -459,6 +460,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if url.path == "/api/prices":
                 return self._send(200, post_prices())
+            if url.path == "/api/export":
+                return self._send(200, exporter.write(db()))
             return self._send(404, {"error": "not found"})
         except Exception as e:
             return self._send(400, {"error": str(e)})
