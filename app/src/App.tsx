@@ -9,6 +9,7 @@ import CollectionView from "./panels/CollectionView";
 import SearchView from "./panels/SearchView";
 import BinderView from "./panels/BinderView";
 import Settings from "./panels/Settings";
+import { Updater } from "./panels/Updater";
 
 export async function loadSessions() {
   const sessions = await api<Session[]>("/api/sessions");
@@ -92,6 +93,8 @@ export default function App() {
   const [settings, setSettings] = useState(false);
   const [error, setError] = useState("");
   const [setupLine, setSetupLine] = useState<string | null>(null);
+  const updateNonce = useStore((s) => s.updateNonce);
+  const [updateChecked, setUpdateChecked] = useState(0);
 
   useEffect(() => {
     const connect = () =>
@@ -221,6 +224,7 @@ export default function App() {
         )}
       </main>
       <footer className="statusbar">
+        <Updater manual={updateNonce > updateChecked} onDone={() => setUpdateChecked(updateNonce)} />
         <span className="msg">{message}</span>
         <span className="spacer" />
         <span>

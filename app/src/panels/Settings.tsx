@@ -43,6 +43,21 @@ export default function Settings({ onClose }: { onClose: () => void }) {
           </div>
           <button onClick={() => run("cards", "Updating card data")}>Update</button>
         </div>
+        <div className="sidebar-h">Updates</div>
+        <div className="setrow">
+          <div>
+            Check for updates
+            <div className="dim">Updates are checked automatically on launch.</div>
+          </div>
+          <button
+            onClick={() => {
+              onClose();
+              useStore.setState((v) => ({ updateNonce: v.updateNonce + 1 }));
+            }}
+          >
+            Check
+          </button>
+        </div>
         <div className="sidebar-h">About</div>
         <div className="setrow">
           <div>

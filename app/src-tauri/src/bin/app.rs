@@ -214,8 +214,10 @@ fn main() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            // only the Windows bundle (tauri.windows.conf.json) has resources
+            // only the installers (tauri.bundle.conf.json) have resources
             let bundle = app.path().resource_dir()?.join("cardscan");
             let rt = if bundle.join("app").join("scan.py").exists() {
                 Runtime::installed(bundle, app.path().app_local_data_dir()?)?

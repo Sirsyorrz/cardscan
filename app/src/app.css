@@ -461,6 +461,20 @@ td.qty button {
   text-overflow: ellipsis;
 }
 
+.updater {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-right: var(--sp-3);
+}
+.updater b {
+  color: var(--accent);
+}
+.updater button {
+  padding: 2px 8px;
+  font-size: var(--fs-sm);
+}
+
 /* Settings */
 .modal-back {
   position: fixed;

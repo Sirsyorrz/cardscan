@@ -42,6 +42,8 @@ type Store = {
   liveSession: number | null;
   live: LiveCard[];
   pending: number;
+  /** Bumped by Settings' "Check" to ask the updater for a loud check. */
+  updateNonce: number;
   setPrefs: (p: Partial<Prefs>) => void;
   say: (message: string) => void;
 };
@@ -58,6 +60,7 @@ export const useStore = create<Store>((set, get) => ({
   liveSession: null,
   live: [],
   pending: 0,
+  updateNonce: 0,
   setPrefs: (p) => {
     const prefs = { ...get().prefs, ...p };
     localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
