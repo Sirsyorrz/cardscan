@@ -958,6 +958,7 @@ def tcgdex_cards(lang, exclude_series=()):
 
 def main():
     CACHE.mkdir(exist_ok=True)
+    OUT.parent.mkdir(exist_ok=True)
     tmp = OUT.with_suffix(".tmp")
     tmp.unlink(missing_ok=True)
     db = sqlite3.connect(tmp)
