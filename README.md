@@ -123,8 +123,9 @@ and every capture is recorded in `data/collection.db` with a status:
   agree, medium when one of them is fuzzy or missing or the printing was chosen from the artwork.
 - `review`: no match, a low-confidence guess, or a capture that wasn't a clean card outline (a card stuck on its
   edge) unless it still matched with high confidence. Not counted until confirmed.
-- `repeat`: the same name as the card before, i.e. the same card read again after it slid. A second copy is never
-  added straight after the first; add extra copies by hand. The surer of the two reads keeps the printing.
+- `repeat`: a name read within the last 6 captures, i.e. the same card read again after it slid or the card on top
+  of it slid off. A second copy is never added that soon after the first; add extra copies by hand. The surer of
+  the two reads keeps the printing.
 - `rejected`: marked "not a card" on the review page.
 
 `--record /tmp/session.mkv` saves the raw feed, and `scan.py /tmp/session.mkv --no-db --out /tmp/caps` replays it

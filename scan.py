@@ -8,8 +8,8 @@ With --control (used by the desktop app) it reads commands from stdin ("mode foi
 as JSON lines; --preview writes the annotated feed to a JPEG at up to 30 fps instead of opening a window.
 
 Every capture goes into data/collection.db (see collection.py) and its image into captures/<session>/, with
-sheet.jpg and session.json beside them. A capture that names the same card as the one before is a repeat (the card
-slid after landing), never a second copy.
+sheet.jpg and session.json beside them. A capture that names a card read in the last few captures is a repeat
+(it slid after landing, or the card on top of it slid off), never a second copy.
 """
 
 import argparse
@@ -174,6 +174,8 @@ def read_score(r):
 ORIENTATION_KEY = "cards_upside_down"
 # surely read cards before a session's own orientation overrides the guess the unsure ones were read with
 SURE_ORIENTATION = 3
+# A card that slides off the pile uncovers the ones under it, which then land again a few captures later
+REPEAT_WINDOW = 6
 
 
 class Session:
@@ -184,7 +186,6 @@ class Session:
         self.db = db
         self.session_id = session_id
         self.entries = []
-        self.last = None
         self.latest = ""
         # which way up the surely read cards were, relative to the camera; it decides for cards that don't read
         self.downs = deque(maxlen=15)
@@ -257,6 +258,13 @@ class Session:
                                        status=entry["status"], confidence=r.confidence)
         self.unsure.clear()
 
+    def _seen(self, name):
+        """The entry first read as `name` among the last REPEAT_WINDOW captures."""
+        for e in reversed(self.entries[-REPEAT_WINDOW:]):
+            if e["id"] and e["name"] == name and e["status"] != "rejected":
+                return self.entries[e["repeat_of"] - 1] if e.get("repeat_of") else e
+        return None
+
     def _process(self, c, mode, t):
         likely_down = self._likely_down()
         r = self.identifier(c.card, likely_down)
@@ -276,10 +284,11 @@ class Session:
         entry = {"n": n, "t": round(t, 1), "file": file, "rough": c.rough, **asdict(r)}
         del entry["upside_down"]
         entry["finish"] = collection.pick_finish(self.db, r.id, mode) if self.db and r.id else None
-        # The same name twice in a row is the same card read again (it slid after landing); a second copy is
-        # never dropped straight after the first. The surer read decides the printing.
-        prev = self.last
-        if r.id and prev and prev["name"] == r.name:
+        # A name read within the last few captures is the same card read again (it slid after landing, or the one
+        # on top slid off it); a second copy is never dropped that soon after the first. The surer read decides
+        # the printing.
+        prev = self._seen(r.name) if r.id else None
+        if prev:
             status = "repeat"
             if RANK[r.confidence] > RANK[prev["confidence"]] and not c.rough:
                 keep = {k: prev[k] for k in ("n", "t", "file", "status", "scan_id") if k in prev}
@@ -290,6 +299,7 @@ class Session:
                 if self.db:
                     collection.update_scan(self.db, prev["scan_id"], card_id=r.id, finish=prev["finish"],
                                            status=prev["status"], confidence=r.confidence)
+            entry["repeat_of"] = prev["n"]
         elif not r.id or r.confidence == "low" or (c.rough and r.confidence != "high"):
             status = "review"
         else:
@@ -298,8 +308,6 @@ class Session:
         if self.db:
             entry["scan_id"] = collection.add_scan(self.db, self.session_id, entry)
         self.entries.append(entry)
-        if r.id and status != "repeat":
-            self.last = entry
         if status == "review" and len(self.downs) < SURE_ORIENTATION:
             self.unsure.append((entry, c.card, r.upside_down, mode))
         elif self.unsure and len(self.downs) >= SURE_ORIENTATION:
@@ -310,8 +318,8 @@ class Session:
                 print(f"{n:4d} {status:6s} {r.confidence or '':6s} {r.name or '?'}" + (f"  [{r.set_code} {r.number}]" if r.id else ""), flush=True)
         if self.report:
             # repeats are reported too: a surer re-read can upgrade the entry shown before
-            shown = self.last if status == "repeat" and self.last else entry
-            self.report({"event": "card", "status": status, "entry_status": shown["status"], "repeat_of": self.last["n"] if status == "repeat" and self.last else None,
+            shown = prev or entry
+            self.report({"event": "card", "status": status, "entry_status": shown["status"], "repeat_of": prev["n"] if prev else None,
                          **{k: shown.get(k) for k in ("n", "t", "scan_id", "name", "set_code", "set_name", "number",
                                                       "confidence", "finish", "game")},
                          "pending": self.jobs.qsize()})
