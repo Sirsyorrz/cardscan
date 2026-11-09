@@ -1,4 +1,6 @@
-# cardscan
+<img src="app/assets/logo.png" align="right" width="160">
+
+# CardScan
 
 Bulk card scanning for Lorcana, Magic, Pokémon and Japanese Pokémon. A camera points down at a pile, you drop cards
 on it one at a time, and each card is identified and added to your collection as it lands.
@@ -6,13 +8,33 @@ on it one at a time, and each card is identified and added to your collection as
 Runs on Linux and Windows. Any camera OpenCV can open works: a USB webcam, a phone in USB webcam mode, or a phone
 streamed in as a virtual webcam (see [Camera](#camera)).
 
-## Requirements
+## Features
+
+- Identifies each card as it lands, from its name, set code and collector number, with GPU OCR
+- Lorcana, Magic, Pokémon and Japanese Pokémon, including showcase and alternate art printings
+- A finish toggle for foils, reverse holos and holos while scanning
+- Review page for unsure reads, a collection with TCGplayer prices in AUD, card search and set binders
+- Built-in updater
+
+## Install
+
+Download the latest release from [Releases](https://github.com/Sirsyorrz/CardScan/releases/latest).
+
+- Windows: the `-setup.exe`. Unsigned, so SmartScreen warns: "More info" then "Run anyway".
+- Linux: the `.AppImage`, `chmod +x`, run.
+
+The first launch installs Python and the scanner's packages into the app's data folder (about 2 GB to download).
+It needs an NVIDIA GPU.
+
+## Build from source
+
+### Requirements
 
 - Python 3 (tested on 3.14) and Node 22.18+ (the matcher runs its TypeScript directly)
 - An NVIDIA GPU: OCR runs through `onnxruntime-gpu` on CUDA
 - A camera on a stand or arm, pointing straight down
 
-## Setup
+### Setup
 
 ```sh
 python3 -m venv .venv
@@ -30,7 +52,7 @@ Card Kingdom, and downloads are cached in `tools/cache/`:
 .venv/bin/python tools/build_db.py
 ```
 
-## Desktop app
+### Desktop app
 
 `app/` is a desktop window over the scripts (Tauri + React) that runs the Python in this folder's `.venv`. Scan has
 the camera picker, Start/Stop, the finish toggle and the live feed with the cards identified so far. Review,
@@ -45,14 +67,26 @@ npm install
 ./run.sh    # builds and starts it
 ```
 
-### Windows installer
+### Installers
 
-`app/release-windows.sh` cross-builds a Windows installer from Linux into
-`app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`. It bundles the scripts, uv, node and the current
-`data/cards.db`. On first run the app copies the scripts to `%LOCALAPPDATA%\dev.cardscan.app` and installs Python and
-the packages there (about 2 GB); the collection and captures live there too.
+The installers bundle the scripts, uv, node and a seed `data/cards.db`, staged into `app/src-tauri/bundle-res/` by
+`app/stage_bundle.py windows|linux`. On first run the app copies the scripts to its data folder
+(`%LOCALAPPDATA%\dev.cardscan.app`, `~/.local/share/dev.cardscan.app`) and installs Python and the packages there;
+the collection and captures live there too.
 
-The script expects a rustup with the `x86_64-pc-windows-msvc` target and cargo-xwin in
+Releases are built by CI: bump the version in `app/package.json`, `app/src-tauri/tauri.conf.json` and
+`app/src-tauri/Cargo.toml`, then push a `vX.Y.Z` tag. To build one locally:
+
+```sh
+cd app
+python3 stage_bundle.py linux
+npx tauri build --bundles appimage --config src-tauri/tauri.bundle.conf.json
+```
+
+Bundles are signed for the updater, so this needs `TAURI_SIGNING_PRIVATE_KEY` and its password set.
+
+`app/release-windows.sh` cross-builds the Windows installer from Linux into
+`app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`. It expects a rustup with the `x86_64-pc-windows-msvc` target and cargo-xwin in
 `~/.local/share/{rustup,cargo}-win`, and a native `makensis` built from the NSIS 3.13 source with the Windows
 release's `Stubs`, `Plugins`, `Include` and `Contrib` in `~/.local/share/nsis-build/nsis/`. Set `CARDSCAN_WIN_TOOLS`
 to use a folder other than `~/.local/share`.
@@ -161,3 +195,8 @@ npm install          # only fetches TypeScript for the typecheck
 npm test             # matcher tests, against data/cards.db
 npm run typecheck
 ```
+
+## Stack
+
+Python (OpenCV, numba, RapidOCR on onnxruntime-gpu), a Node/TypeScript matcher over SQLite, and a Tauri 2 + React
+desktop app.
