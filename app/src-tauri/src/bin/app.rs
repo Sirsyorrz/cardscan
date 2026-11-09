@@ -56,8 +56,10 @@ fn open_url(url: String) -> Result<(), String> {
     } else {
         "xdg-open"
     };
-    let mut child =
-        std::process::Command::new(opener).arg(&url).spawn().map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new(opener);
+    cmd.arg(&url);
+    cardscan::host_env(&mut cmd);
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     // reap it so it doesn't linger as a zombie
     std::thread::spawn(move || child.wait());
     Ok(())

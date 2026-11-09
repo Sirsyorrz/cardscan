@@ -1,7 +1,7 @@
 //! Runs the Python side of cardscan: the review server in the background, the scanner on demand,
 //! and one-off jobs such as rebuilding the card data. From a checkout it runs the repo this app
-//! lives in; the Windows installer instead bundles the scripts, uv and node, copies the scripts to
-//! the app's data folder and installs Python there on first run.
+//! lives in; the installers (Windows NSIS, Linux AppImage) instead bundle the scripts, uv and node,
+//! copy the scripts to the app's data folder and install Python there on first run.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
@@ -62,10 +62,13 @@ impl Runtime {
         cmd.arg("-u").args(args).current_dir(&self.root);
         // Windows pipes and files otherwise use the ANSI code page, which can't hold every card name
         cmd.env("PYTHONUTF8", "1");
+        host_env(&mut cmd);
         if let Some(bundle) = &self.bundle {
             // identify.py starts `node` for the matcher
             let mut path = OsString::from(bundle.join("node"));
-            if let Some(rest) = std::env::var_os("PATH") {
+            let host_path =
+                cmd.get_envs().find(|(k, _)| *k == "PATH").map(|(_, v)| v.map(OsString::from));
+            if let Some(rest) = host_path.unwrap_or_else(|| std::env::var_os("PATH")) {
                 path.push(if cfg!(windows) { ";" } else { ":" });
                 path.push(rest);
             }
@@ -101,6 +104,7 @@ impl Runtime {
                 .env("UV_CACHE_DIR", self.root.join("uv-cache"))
                 .env("UV_PYTHON_PREFERENCE", "only-managed")
                 .env("NO_COLOR", "1");
+            host_env(&mut cmd);
             no_window(&mut cmd);
             cmd
         };
@@ -136,6 +140,34 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// An AppImage's AppRun points PYTHONHOME, LD_LIBRARY_PATH, GTK_PATH and the like into its mount for
+/// the app itself. The venv's Python ("No module named 'encodings'") and xdg-open break on them, so
+/// children get the host's values back: entries under the mount are dropped from each variable.
+pub fn host_env(cmd: &mut Command) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let Some(appdir) = std::env::var_os("APPDIR") else { return };
+    let appdir = appdir.to_string_lossy().trim_end_matches('/').to_string();
+    if appdir.is_empty() {
+        return;
+    }
+    for (key, value) in std::env::vars_os() {
+        let value = value.to_string_lossy();
+        if !value.contains(&appdir) {
+            continue;
+        }
+        let kept: Vec<&str> =
+            value.split(':').filter(|p| !p.is_empty() && !p.starts_with(&appdir)).collect();
+        if kept.is_empty() {
+            cmd.env_remove(&key);
+        } else {
+            cmd.env(&key, kept.join(":"));
+        }
+    }
+    cmd.env_remove("PYTHONDONTWRITEBYTECODE");
 }
 
 #[cfg(windows)]
