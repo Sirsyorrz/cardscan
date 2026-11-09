@@ -17,12 +17,12 @@ export type LiveCard = {
   repeats: number;
 };
 
-type Prefs = { source: string; mode: string };
+type Prefs = { source: string; mode: string; collectionView: "list" | "wall"; wallZoom: number };
 
 const PREFS_KEY = "cardscan.prefs";
 
 function loadPrefs(): Prefs {
-  const fallback = { source: "", mode: "normal" };
+  const fallback: Prefs = { source: "", mode: "normal", collectionView: "list", wallZoom: 120 };
   try {
     return { ...fallback, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") };
   } catch {

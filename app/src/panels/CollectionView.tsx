@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api, cardLine, gameOf, money, url, type Item, type Items } from "../api";
 import { useStore } from "../state";
 import CardModal from "./CardModal";
+import CardWall, { clampZoom, ZOOM_MAX, ZOOM_MIN } from "./CardWall";
 import GameSelect from "./GameSelect";
 import ImportModal from "./ImportModal";
 
@@ -23,6 +24,15 @@ const COMPARE: Record<SortKey, (a: Item, b: Item) => number> = {
 
 // Clicking a new column starts high-to-low for numbers and dates, A-Z for text.
 const DESC_FIRST: SortKey[] = ["price", "qty", "added"];
+
+const SORTS: { key: SortKey; label: string }[] = [
+  { key: "name", label: "Card" },
+  { key: "set", label: "Set" },
+  { key: "finish", label: "Finish" },
+  { key: "price", label: "Price" },
+  { key: "qty", label: "Qty" },
+  { key: "added", label: "Added" },
+];
 
 /** The card image, or your own scan of it when there's none online yet (new sets, before TCGplayer has photos). */
 function Thumb({ item }: { item: Item }) {
@@ -48,6 +58,13 @@ function added(ms: number) {
 
 export default function CollectionView() {
   const say = useStore((s) => s.say);
+  const layout = useStore((s) => s.prefs.collectionView);
+  const zoom = useStore((s) => s.prefs.wallZoom);
+  const setPrefs = useStore((s) => s.setPrefs);
+  const onZoom = useCallback(
+    (update: (cell: number) => number) => setPrefs({ wallZoom: update(useStore.getState().prefs.wallZoom) }),
+    [setPrefs],
+  );
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "added", desc: true });
   const [data, setData] = useState<Items | null>(null);
@@ -130,7 +147,44 @@ export default function CollectionView() {
         <button title="Add cards from another app's CSV export" onClick={() => setImporting(true)}>
           Import
         </button>
+        <div className="seg">
+          <button className={layout === "list" ? "on" : ""} onClick={() => setPrefs({ collectionView: "list" })}>
+            List
+          </button>
+          <button className={layout === "wall" ? "on" : ""} onClick={() => setPrefs({ collectionView: "wall" })}>
+            View all
+          </button>
+        </div>
       </div>
+      {layout === "wall" && (
+        <div className="toolbar">
+          <div className="seg">
+            {SORTS.map(({ key, label }) => (
+              <button
+                key={key}
+                className={sort.key === key ? "on" : ""}
+                onClick={() => sortBy(key)}
+                title="Sort; click again to reverse"
+              >
+                {label}
+                {sort.key === key && <span className="arrow">{sort.desc ? "▼" : "▲"}</span>}
+              </button>
+            ))}
+          </div>
+          <div className="grow" />
+          <span className="dim" title="Ctrl+scroll over the cards to zoom">
+            Zoom
+          </span>
+          <input
+            type="range"
+            className="zoom"
+            min={ZOOM_MIN}
+            max={ZOOM_MAX}
+            value={zoom}
+            onChange={(e) => setPrefs({ wallZoom: clampZoom(Number(e.target.value)) })}
+          />
+        </div>
+      )}
       <div className="summary">
         <b>{copies}</b> cards · {rows.length} entries · <b className="accent">{money(value, rate) || "no prices"}</b>
         <span className="dim">
@@ -138,51 +192,66 @@ export default function CollectionView() {
           · {data?.prices_at ? `prices from ${new Date(Number(data.prices_at)).toLocaleDateString()}` : "snapshot prices"}
         </span>
       </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th></th>
-              {header("name", "Card")}
-              {header("set", "Set")}
-              {header("finish", "Finish")}
-              {header("price", "Price", true)}
-              {header("qty", "Qty", true)}
-              {header("added", "Added", true)}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={`${r.card_id}|${r.finish}|${r.condition}`} className="clickable" onClick={() => setOpened(r.card_id)}>
-                <td>
-                  <Thumb item={r} />
-                </td>
-                <td>
-                  {r.name}
-                  {r.local_name && <span className="dim"> {r.local_name}</span>}
-                </td>
-                <td>
-                  {r.set_name} <span className="dim">{cardLine(r)}</span>
-                </td>
-                <td>
-                  {r.finish_label}
-                  {r.condition !== "NM" && <span className="dim"> · {r.condition}</span>}
-                </td>
-                <td className="num">{money(r.usd, rate)}</td>
-                <td className="num qty" onClick={(e) => e.stopPropagation()}>
-                  <button onClick={() => adjust(i, -1)}>−</button>
-                  <span>{r.qty}</span>
-                  <button onClick={() => adjust(i, 1)}>+</button>
-                </td>
-                <td className="num dim" title={new Date(r.added_at).toLocaleString()}>
-                  {added(r.added_at)}
-                </td>
+      {layout === "wall" ? (
+        <>
+          <CardWall items={rows} rate={rate} cell={zoom} onZoom={onZoom} onOpen={setOpened} />
+          {data && !rows.length && (
+            <div className="empty dim">{q || game ? "No matches." : "Nothing in the collection yet."}</div>
+          )}
+        </>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th></th>
+                {header("name", "Card")}
+                {header("set", "Set")}
+                {header("finish", "Finish")}
+                {header("price", "Price", true)}
+                {header("qty", "Qty", true)}
+                {header("added", "Added", true)}
               </tr>
-            ))}
-          </tbody>
-        </table>
-        {data && !rows.length && <div className="empty dim">{q || game ? "No matches." : "Nothing in the collection yet."}</div>}
-      </div>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr
+                  key={`${r.card_id}|${r.finish}|${r.condition}`}
+                  className="clickable"
+                  onClick={() => setOpened(r.card_id)}
+                >
+                  <td>
+                    <Thumb item={r} />
+                  </td>
+                  <td>
+                    {r.name}
+                    {r.local_name && <span className="dim"> {r.local_name}</span>}
+                  </td>
+                  <td>
+                    {r.set_name} <span className="dim">{cardLine(r)}</span>
+                  </td>
+                  <td>
+                    {r.finish_label}
+                    {r.condition !== "NM" && <span className="dim"> · {r.condition}</span>}
+                  </td>
+                  <td className="num">{money(r.usd, rate)}</td>
+                  <td className="num qty" onClick={(e) => e.stopPropagation()}>
+                    <button onClick={() => adjust(i, -1)}>−</button>
+                    <span>{r.qty}</span>
+                    <button onClick={() => adjust(i, 1)}>+</button>
+                  </td>
+                  <td className="num dim" title={new Date(r.added_at).toLocaleString()}>
+                    {added(r.added_at)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {data && !rows.length && (
+            <div className="empty dim">{q || game ? "No matches." : "Nothing in the collection yet."}</div>
+          )}
+        </div>
+      )}
       {importing && <ImportModal onClose={() => setImporting(false)} onImported={load} />}
       {opened && <CardModal id={opened} onClose={() => setOpened(null)} onChanged={load} />}
     </div>
