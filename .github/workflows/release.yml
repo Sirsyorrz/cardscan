@@ -1,0 +1,98 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  cards:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: actions/cache@v6
+        with:
+          path: tools/cache
+          key: build-db-${{ github.run_id }}
+          restore-keys: build-db-
+      - run: python tools/build_db.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cards-db
+          path: data/cards.db
+          retention-days: 1
+
+  release:
+    needs: cards
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            bundles: nsis
+          - os: ubuntu-22.04
+            platform: linux
+            bundles: appimage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: cards-db
+          path: data
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Stage bundle
+        run: python app/stage_bundle.py ${{ matrix.platform }}
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install
+        working-directory: app
+        run: npm ci
+
+      # Also writes latest.json, which is what installed copies poll to find
+      # out an update exists.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tagName: ${{ github.ref_name }}
+          releaseName: CardScan ${{ github.ref_name }}
+          releaseBody: |
+            Installed copies will offer this automatically. Otherwise download below.
+
+            **Windows:** the `-setup.exe`. Unsigned, so SmartScreen warns:
+            "More info" then "Run anyway".
+
+            **Linux:** the `.AppImage`, `chmod +x`, run.
+
+            First launch installs Python and the scanner's packages (about 2 GB). Needs an NVIDIA GPU.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          args: --bundles ${{ matrix.bundles }} --config src-tauri/tauri.bundle.conf.json
