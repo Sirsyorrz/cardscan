@@ -147,7 +147,7 @@ def find_card(cards, row, game_hint):
     in_set = [c for c in in_set if names_match(name, c)]
     if game_hint:
         in_set = [c for c in in_set if c["game"] == game_hint] or in_set
-    # Magic here is English only, so a Japanese Magic card lands on its English printing
+    # the export's language first; a card printed in English too is only here in English
     in_set.sort(key=lambda c: c["lang"] != lang)
     if number:
         found = [c for c in in_set if same_number(c["number"], number)]

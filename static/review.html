@@ -89,7 +89,8 @@ function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
   clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.style.display = 'none'), 2500);
 }
-const cardLine = (c) => c ? `${esc(c.set_code)} #${esc(c.number)}${c.lang === 'ja' ? ' JP' : ''}` : '';
+const langTag = (l) => !l || l === 'en' ? '' : ` ${l === 'ja' ? 'JP' : esc(l.toUpperCase())}`;
+const cardLine = (c) => c ? `${esc(c.set_code)} #${esc(c.number)}${langTag(c.lang)}` : '';
 const gameOf = (c) => !c ? '' : c.game === 'pkm' && c.lang === 'ja' ? 'pkj' : c.game;
 
 async function loadSessions() {

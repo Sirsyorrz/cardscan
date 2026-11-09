@@ -105,9 +105,10 @@ def options(q):
     ids = json.loads(scan["candidates"] or "[]")
     rows = []
     if scan["card_id"]:
+        # a Magic card's language-only printings are more printings of it; Japanese Pokémon is its own card pool
         cur = db().execute("SELECT name, game, lang FROM c.cards WHERE id = ?", (scan["card_id"],)).fetchone()
         rows = db().execute(
-            f"SELECT {CARD_COLS} FROM c.cards WHERE name = ? AND game = ? AND lang = ? ORDER BY released DESC LIMIT 120",
+            f"SELECT {CARD_COLS} FROM c.cards WHERE name = ? AND game = ? AND (game = 'mtg' OR lang = ?) ORDER BY released DESC LIMIT 120",
             (cur["name"], cur["game"], cur["lang"]),
         ).fetchall()
     seen = {r["id"] for r in rows}
@@ -262,7 +263,7 @@ def card_detail(q):
         (card["id"],),
     ).fetchall()
     rows = db().execute(
-        f"""SELECT {CARD_COLS}, set_id FROM c.cards WHERE name = ? AND game = ? AND lang = ?
+        f"""SELECT {CARD_COLS}, set_id FROM c.cards WHERE name = ? AND game = ? AND (game = 'mtg' OR lang = ?)
             ORDER BY released DESC, set_code, number_sort LIMIT 150""",
         (card["name"], card["game"], card["lang"]),
     ).fetchall()

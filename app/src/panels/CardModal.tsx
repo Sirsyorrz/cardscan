@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { api, money, url, type CardDetail } from "../api";
+import { api, LANG_LABEL, money, url, type CardDetail } from "../api";
 import { useStore } from "../state";
 
 const hide = (e: React.SyntheticEvent<HTMLImageElement>) => (e.currentTarget.style.visibility = "hidden");
@@ -103,7 +103,7 @@ export default function CardModal({
                 </div>
                 <div className="dim">
                   {c.set_name} · {c.set_code} #{c.number}
-                  {c.lang === "ja" ? " · Japanese" : ""}
+                  {c.lang !== "en" ? ` · ${LANG_LABEL[c.lang] ?? c.lang}` : ""}
                 </div>
               </div>
               <button onClick={onClose}>Close</button>

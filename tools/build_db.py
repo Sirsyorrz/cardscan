@@ -116,7 +116,7 @@ def play_id(key):
 
 def assign_slots(entries):
     """
-    Binder slots: (card_id, set_id, name, number, number_sort, is_base) -> {card_id: slot number}.
+    Binder slots: (card_id, set_id, name, number, number_sort, is_base[, may_be_base]) -> {card_id: slot number}.
     Base cards fill their own number. Secret rares and alternate arts fill the base slot of the same name,
     so owning only the full art still completes it; ones with no base counterpart get None.
     """
@@ -126,13 +126,16 @@ def assign_slots(entries):
     slots = {}
     for items in by_set.values():
         if not any(e[5] for e in items):
-            items = [(*e[:5], True) for e in items]
+            # a set of only special printings (Mystical Archive) is its own base; an optional 7th field marks the
+            # printings that may be (English, when a set also has language-only ones)
+            primary = {e[0] for e in items if len(e) < 7 or e[6]} or {e[0] for e in items}
+            items = [(*e[:5], e[0] in primary) for e in items]
         base_by_name = {}
-        for cid, _, name, number, _, base in sorted(items, key=lambda e: (e[4], e[3])):
+        for cid, _, name, number, _, base, *_ in sorted(items, key=lambda e: (e[4], e[3])):
             if base:
                 slots[cid] = number
                 base_by_name.setdefault(name, number)
-        for cid, _, name, _, _, base in items:
+        for cid, _, name, _, _, base, *_ in items:
             if not base:
                 slots[cid] = base_by_name.get(name)
     return slots
@@ -247,8 +250,11 @@ def build_mtg(db):
             if not line.startswith("{"):
                 continue
             c = json.loads(line)
-            if c.get("lang") != "en" or c.get("digital") or c.get("layout") == "art_series":
+            # Scryfall's default cards are English apart from printings that exist only in another language
+            # (Phyrexian ONE, Japanese alternate-art Mystical Archive, foreign black-bordered sets), so those stay
+            if c.get("digital") or c.get("layout") == "art_series":
                 continue
+            lang = c.get("lang") or "en"
             faces = c.get("card_faces") or []
             oracle = c.get("oracle_text")
             if oracle is None and faces:
@@ -269,8 +275,11 @@ def build_mtg(db):
                 and c.get("border_color") != "borderless"
                 and "boosterfun" not in (c.get("promo_types") or [])
                 and not MTG_ALT_FRAMES & set(c.get("frame_effects") or [])
+                # a language-only printing fills the slot of its English card; assign_slots makes a set with no
+                # English cards at all base by itself
+                and lang == "en"
             )
-            slot_entries.append((c["id"], c["set"], c["name"], number, number_sort(number), base))
+            slot_entries.append((c["id"], c["set"], c["name"], number, number_sort(number), base, lang == "en"))
             if c["set"] not in sets:
                 info = scry_sets.get(c["set"], {})
                 set_type = c.get("set_type") or info.get("set_type") or ""
@@ -279,6 +288,8 @@ def build_mtg(db):
                     "extra" if set_type in MTG_EXTRA_SET_TYPES else "main", set_type.replace("_", " ").capitalize(),
                     info.get("icon_svg_uri"),
                 )
+            # Phyrexian is printed in its own script, which only reads as noise in a font without it
+            local = c.get("printed_name") if lang not in ("en", "ph") and c.get("printed_name") != c["name"] else None
             ck_entry = ck_by_id.get(c["id"], {})
             ck_url = next((u for _, u in ck_entry.values() if u), None)
             cards.append((
@@ -292,7 +303,7 @@ def build_mtg(db):
                 c.get("artist"), c.get("released_at"), None, ",".join(c.get("finishes") or []),
                 text_id if oracle else None, c.get("tcgplayer_id"), None, ck_url,
                 # transform/MDFC cards have a real second face image at .../back/...
-                int(bool(faces) and "image_uris" not in c), "en", None, None,
+                int(bool(faces) and "image_uris" not in c), lang, local, local and norm(local),
                 legal, play_id(("mtg", c.get("oracle_id") or c["name"])), "".join(c.get("color_identity") or []), c["set"],
             ))
             p = c.get("prices") or {}

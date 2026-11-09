@@ -124,8 +124,33 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
   return data as T;
 }
 
+/** Scryfall's language codes, for the Magic printings that exist only in one language, plus Japanese Pokémon. */
+export const LANG_LABEL: Record<string, string> = {
+  ja: "Japanese",
+  ph: "Phyrexian",
+  es: "Spanish",
+  fr: "French",
+  it: "Italian",
+  de: "German",
+  pt: "Portuguese",
+  ru: "Russian",
+  ko: "Korean",
+  zhs: "Simplified Chinese",
+  zht: "Traditional Chinese",
+  he: "Hebrew",
+  ar: "Arabic",
+  la: "Latin",
+  grc: "Ancient Greek",
+  sa: "Sanskrit",
+  qya: "Quenya",
+  tlh: "Klingon",
+  dw: "Dwarvish",
+};
+
+const langTag = (lang?: string) => (!lang || lang === "en" ? "" : ` ${lang === "ja" ? "JP" : lang.toUpperCase()}`);
+
 export function cardLine(c: { set_code: string; number: string; lang?: string } | null) {
-  return c ? `${c.set_code} #${c.number}${c.lang === "ja" ? " JP" : ""}` : "";
+  return c ? `${c.set_code} #${c.number}${langTag(c.lang)}` : "";
 }
 
 /** Game filter scopes; keys must match GAME_SCOPE in review.py. */
