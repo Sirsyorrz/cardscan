@@ -3,3 +3,4 @@ numpy==2.5.4
 onnxruntime-gpu[cuda,cudnn]==1.31.1
 opencv-python==5.0.0.93
 rapidocr==3.10.0
+cv2-enumerate-cameras==1.4.0; sys_platform == "win32"

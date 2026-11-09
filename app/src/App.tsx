@@ -87,14 +87,21 @@ export default function App() {
   const liveSession = useStore((s) => s.liveSession);
   const [settings, setSettings] = useState(false);
   const [error, setError] = useState("");
+  const [setupLine, setSetupLine] = useState<string | null>(null);
 
   useEffect(() => {
-    invoke<string>("server_url")
-      .then((b) => {
-        useStore.setState({ base: b });
-        return loadSessions();
-      })
-      .catch((e) => setError(String(e)));
+    const connect = () =>
+      invoke<string>("server_url")
+        .then((b) => {
+          useStore.setState({ base: b });
+          return loadSessions();
+        })
+        .catch((e) => setError(String(e)));
+    invoke<boolean>("setup_needed").then((needed) => {
+      if (!needed) return connect();
+      setSetupLine("Starting");
+      invoke("job_run", { job: "setup" }).catch((e) => setError(String(e)));
+    });
     invoke<boolean>("scan_running").then((r) => useStore.setState({ scanning: r }));
     let lastLog = "";
     const off = [
@@ -103,9 +110,17 @@ export default function App() {
         if (e.payload.trim()) lastLog = e.payload.trim();
       }),
       listen<{ job: string; line: string }>("job:line", (e) => {
-        if (e.payload.job === "cards" && e.payload.line.trim()) useStore.getState().say(e.payload.line.trim());
+        const line = e.payload.line.trim();
+        if (!line) return;
+        if (e.payload.job === "setup") setSetupLine(line);
+        if (e.payload.job === "cards") useStore.getState().say(line);
       }),
       listen<{ job: string; code: number }>("job:done", async (e) => {
+        if (e.payload.job === "setup") {
+          if (e.payload.code !== 0) return setError(`Setup failed (exit code ${e.payload.code})`);
+          setSetupLine(null);
+          return connect();
+        }
         if (e.payload.job !== "cards") return;
         if (e.payload.code !== 0) return useStore.getState().say("Card data update failed");
         // the server holds the old cards.db open; a new one attaches the rebuilt file
@@ -135,6 +150,16 @@ export default function App() {
         <h2>Couldn't start</h2>
         <p className="mono">{error}</p>
         <p className="dim">The app runs the Python scripts in the cardscan folder with its .venv.</p>
+      </div>
+    );
+  }
+
+  if (setupLine !== null) {
+    return (
+      <div className="fatal">
+        <h2>Setting up CardScan</h2>
+        <p>First run only: installing Python and the scanner's packages, about 2 GB to download.</p>
+        <p className="mono dim">{setupLine}</p>
       </div>
     );
   }
@@ -183,6 +208,10 @@ export default function App() {
           <ScanView />
         ) : view === "review" ? (
           <ReviewView />
+        ) : view === "search" ? (
+          <SearchView />
+        ) : view === "binders" ? (
+          <BinderView />
         ) : (
           <CollectionView />
         )}

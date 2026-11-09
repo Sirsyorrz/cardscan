@@ -1,15 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cardscan::{Camera, Scan, ScanOptions, Server};
+use cardscan::{Camera, Runtime, Scan, ScanOptions, Server};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 struct App {
-    root: PathBuf,
+    rt: Arc<Runtime>,
     server: Mutex<Option<Server>>,
     scan: Arc<Mutex<Option<Scan>>>,
     job: Mutex<Option<String>>,
@@ -20,7 +19,7 @@ async fn server_url(state: State<'_, App>) -> Result<String, String> {
     let port = {
         let mut server = state.server.lock().unwrap();
         if server.is_none() {
-            *server = Some(Server::start(&state.root).map_err(|e| e.to_string())?);
+            *server = Some(Server::start(&state.rt).map_err(|e| e.to_string())?);
         }
         server.as_ref().unwrap().port
     };
@@ -39,12 +38,29 @@ async fn server_url(state: State<'_, App>) -> Result<String, String> {
     if !ready {
         // let the next call start a fresh one
         *state.server.lock().unwrap() = None;
-        return Err(format!(
-            "review server didn't start; check {}",
-            cardscan::python(&state.root).display()
-        ));
+        return Err(format!("review server didn't start; check {}", state.rt.python().display()));
     }
     Ok(format!("http://127.0.0.1:{port}"))
+}
+
+/// Opens a web page in the default browser; only https links, since the URL comes from the page.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("not an https link".into());
+    }
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let mut child =
+        std::process::Command::new(opener).arg(&url).spawn().map_err(|e| e.to_string())?;
+    // reap it so it doesn't linger as a zombie
+    std::thread::spawn(move || child.wait());
+    Ok(())
 }
 
 #[tauri::command]
@@ -54,12 +70,20 @@ fn server_restart(state: State<'_, App>) {
 
 #[tauri::command]
 fn root_dir(state: State<'_, App>) -> String {
-    state.root.to_string_lossy().to_string()
+    state.rt.root.to_string_lossy().to_string()
 }
 
 #[tauri::command]
-fn cameras() -> Vec<Camera> {
-    cardscan::cameras()
+async fn cameras(state: State<'_, App>) -> Result<Vec<Camera>, String> {
+    let rt = state.rt.clone();
+    tauri::async_runtime::spawn_blocking(move || cardscan::cameras(&rt))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn setup_needed(state: State<'_, App>) -> bool {
+    state.rt.needs_setup()
 }
 
 #[tauri::command]
@@ -86,7 +110,7 @@ fn scan_start(
     let opts = ScanOptions { source, mode };
     let (out, err) = (app.clone(), app.clone());
     let scan = Scan::start(
-        &state.root,
+        &state.rt,
         &opts,
         move |line| match serde_json::from_str::<serde_json::Value>(&line) {
             Ok(v) => {
@@ -146,12 +170,14 @@ struct JobDone {
     code: i32,
 }
 
-/// One-off scripts: `prices` refreshes prices, `cards` rebuilds data/cards.db (several minutes).
+/// One-off jobs: `prices` refreshes prices, `cards` rebuilds data/cards.db (several minutes),
+/// `setup` installs Python for an installed copy (first run, a large download).
 #[tauri::command]
 fn job_run(app: AppHandle, state: State<'_, App>, job: String) -> Result<(), String> {
     let args: &[&str] = match job.as_str() {
         "prices" => &["prices.py"],
         "cards" => &["tools/build_db.py"],
+        "setup" => &[],
         _ => return Err(format!("unknown job {job}")),
     };
     {
@@ -161,14 +187,16 @@ fn job_run(app: AppHandle, state: State<'_, App>, job: String) -> Result<(), Str
         }
         *running = Some(job.clone());
     }
-    let root = state.root.clone();
+    let rt = state.rt.clone();
     std::thread::spawn(move || {
         let lines = app.clone();
         let name = job.clone();
-        let code = cardscan::run_job(&root, args, move |line| {
+        let on_line = move |line| {
             let _ = lines.emit("job:line", JobLine { job: name.clone(), line });
-        })
-        .unwrap_or(-1);
+        };
+        let code =
+            if job == "setup" { rt.setup(on_line) } else { cardscan::run_job(&rt, args, on_line) }
+                .unwrap_or(-1);
         *app.state::<App>().job.lock().unwrap() = None;
         let _ = app.emit("job:done", JobDone { job, code });
     });
@@ -185,8 +213,15 @@ fn main() {
 
     tauri::Builder::default()
         .setup(|app| {
+            // only the Windows bundle (tauri.windows.conf.json) has resources
+            let bundle = app.path().resource_dir()?.join("cardscan");
+            let rt = if bundle.join("app").join("scan.py").exists() {
+                Runtime::installed(bundle, app.path().app_local_data_dir()?)?
+            } else {
+                Runtime::checkout()
+            };
             app.manage(App {
-                root: cardscan::root(),
+                rt: Arc::new(rt),
                 server: Mutex::new(None),
                 scan: Arc::new(Mutex::new(None)),
                 job: Mutex::new(None),
@@ -195,6 +230,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             server_url,
+            open_url,
             server_restart,
             root_dir,
             cameras,
@@ -202,7 +238,8 @@ fn main() {
             scan_start,
             scan_mode,
             scan_stop,
-            job_run
+            job_run,
+            setup_needed
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

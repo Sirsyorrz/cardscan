@@ -17,7 +17,7 @@ fn replay_reports_cards_and_takes_commands() {
     let (tx, rx) = mpsc::channel::<serde_json::Value>();
     let opts = ScanOptions { source: video, mode: "normal".into() };
     let mut scan = Scan::start(
-        &cardscan::root(),
+        &cardscan::Runtime::checkout(),
         &opts,
         move |line| {
             if let Ok(v) = serde_json::from_str(&line) {

@@ -46,7 +46,7 @@ export default function Settings({ onClose }: { onClose: () => void }) {
         <div className="sidebar-h">About</div>
         <div className="setrow">
           <div>
-            Project folder
+            Data folder
             <div className="dim mono">{root}</div>
           </div>
         </div>
