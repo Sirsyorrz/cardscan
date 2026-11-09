@@ -129,6 +129,25 @@ def remap_missing(db):
                 _bump(db, new[0], row["finish"], row["condition"], row["qty"])
             db.execute("DELETE FROM items WHERE card_id = ?", (old,))
             db.execute("UPDATE scans SET card_id = ? WHERE card_id = ?", (new[0], old))
+    remap_finishes(db)
+
+
+def remap_finishes(db):
+    """Move copies whose finish their card no longer lists onto its only finish. A rebuilt cards.db can correct a
+    card's finishes (TCGdex lists new and some older Pokemon sets as "normal" until it fills them in), and a copy
+    scanned before that got the only finish there was. Cards with several finishes are left for a person to fix."""
+    stray = db.execute(
+        """SELECT DISTINCT i.card_id, i.finish FROM items i WHERE i.card_id IN (SELECT card_id FROM c.variants)
+           AND NOT EXISTS (SELECT 1 FROM c.variants v WHERE v.card_id = i.card_id AND v.key = i.finish)""").fetchall()
+    with db:
+        for card_id, finish in stray:
+            keys = [k for k, _ in finishes(db, card_id)]
+            if len(keys) != 1:
+                continue
+            for row in db.execute("SELECT * FROM items WHERE card_id = ? AND finish = ?", (card_id, finish)).fetchall():
+                _bump(db, card_id, keys[0], row["condition"], row["qty"])
+            db.execute("DELETE FROM items WHERE card_id = ? AND finish = ?", (card_id, finish))
+            db.execute("UPDATE scans SET finish = ? WHERE card_id = ? AND finish = ?", (keys[0], card_id, finish))
 
 
 def get_meta(db, key):

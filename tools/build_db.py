@@ -477,14 +477,28 @@ def build_pokemon(db):
         gid = product_group.get(pid) if pid else set_group.get(s["id"])
         if not pid and gid:
             key = d["localId"].lstrip("0").upper() or "0"
-            candidates = [p for p in group_numbers[gid].get(key, []) if norm(d["name"]) in norm(p["name"])]
+            at_number = group_numbers[gid].get(key, [])
+            candidates = [p for p in at_number if norm(d["name"]) in norm(p["name"])]
+            # names can differ ("Growing Grass Energy" is "Growing G Energy" on TCGplayer); a lone product at
+            # that number is still the card
+            if not candidates and len(at_number) == 1:
+                candidates = at_number
             if candidates:
                 pid = candidates[0]["productId"]
         if pid:
             matched += 1
 
         card_variants = {}
-        for v in d.get("variants_detailed") or []:
+        detailed = d.get("variants_detailed") or []
+        # "generated" variants are TCGdex guessing, often "normal" only (new sets until it fills them in, much of
+        # XY and Sun & Moon); TCGplayer's price sub-types are what was actually printed
+        if detailed and all(v.get("variantId") == "generated" for v in detailed):
+            subs = [sub for sub in prices.get(pid, {}) if sub in SUBTYPE_FINISH] if pid else []
+            if subs:
+                detailed = []
+                card_variants = {SUBTYPE_FINISH[sub]: (TYPE_LABEL[SUBTYPE_FINISH[sub]], SUBTYPE_FINISH[sub], pid,
+                                                       product_group.get(pid), sub, True) for sub in subs}
+        for v in detailed:
             if v.get("type") not in VARIANT_ORDER:
                 continue
             key = variant_key(v)
@@ -946,8 +960,9 @@ def tcgdex_cards(lang, exclude_series=()):
     def load(kind, item_id, max_age):
         # ids such as "SM1+" need escaping
         safe = urllib.parse.quote(item_id, safe="")
+        endpoint = {"set-": "sets", "cards/": "cards"}[kind]
         try:
-            return cached_json(f"{folder}/{kind}{safe}.json", f"https://api.tcgdex.net/v2/{lang}/{kind.rstrip('-/')}s/{safe}", max_age=max_age)
+            return cached_json(f"{folder}/{kind}{safe}.json", f"https://api.tcgdex.net/v2/{lang}/{endpoint}/{safe}", max_age=max_age)
         except urllib.error.HTTPError as e:
             if e.code != 404:
                 raise
@@ -963,7 +978,9 @@ def tcgdex_cards(lang, exclude_series=()):
     # card details rarely change; prices come from tcgcsv, so a long cache is fine
     with ThreadPoolExecutor(16) as ex:
         details = [d for d in ex.map(lambda cid: load("cards/", cid, 30 * 86400), ids) if d]
-    set_info = {s["id"]: s for s in set_details}
+    # a set TCGdex lists before publishing its cards counts as missing, so tcgplayer_only_sets still fills it in
+    with_cards = {d["set"]["id"] for d in details}
+    set_info = {s["id"]: s for s in set_details if s["id"] in with_cards}
     return set_info, [d for d in details if d["set"]["id"] in set_info]
 
 

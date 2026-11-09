@@ -73,7 +73,7 @@ test('pokemon: set code + number/total with the name cropped beats a Magic set w
 
 test('pokemon: a Nidoran is told apart by its number', async () => {
   const m = await scan('pkm', lines(['BASIC Nidoran♀ HP60', 0.05], ['Find a Friend', 0.6], ['DLR EN 055/103', 0.95]));
-  assert.equal(m?.name, 'Nidoran ♀');
+  assert.equal(m?.name, 'Nidoran♀');
   assert.equal(m?.set_code, 'DLR');
 });
 
