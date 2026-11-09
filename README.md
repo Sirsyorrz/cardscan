@@ -18,7 +18,7 @@ streamed in as a virtual webcam (see [Camera](#camera)).
 
 ## Install
 
-Download the latest release from [Releases](https://github.com/Sirsyorrz/CardScan/releases/latest).
+Download the latest release from [Releases](https://github.com/Sirsyorrz/cardscan/releases/latest).
 
 - Windows: the `-setup.exe`. Unsigned, so SmartScreen warns: "More info" then "Run anyway".
 - Linux: the `.AppImage`, `chmod +x`, run.
