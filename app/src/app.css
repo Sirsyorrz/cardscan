@@ -418,6 +418,8 @@ input.zoom::-webkit-slider-thumb {
   min-height: 0;
   position: relative;
   display: flex;
+  /* the lens z-indexes cards up to ~400; keep that from stacking over the card popup */
+  isolation: isolate;
 }
 .wall {
   flex: 1;
