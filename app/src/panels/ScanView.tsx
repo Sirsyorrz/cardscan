@@ -123,7 +123,7 @@ export default function ScanView() {
             {[...live].reverse().map((c) => (
               <div key={c.n} className={`liverow st-${c.status}`}>
                 <span className={`chip st-${c.status}`}>{c.status}</span>
-                <span className="grow ellipsis">
+                <span className="grow name">
                   {c.name ?? "?"}
                   <span className="dim"> {c.set_code ? `${c.set_code} #${c.number}` : ""}</span>
                 </span>

@@ -250,8 +250,16 @@ button.danger:hover:not(:disabled) {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  height: var(--row-h);
-  padding: 0 var(--sp-3);
+  min-height: var(--row-h);
+  padding: var(--sp-1) var(--sp-3);
+}
+.liverow .name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.liverow .chip,
+.liverow .conf {
+  flex-shrink: 0;
 }
 .liverow:first-child {
   background: var(--row-sel);
