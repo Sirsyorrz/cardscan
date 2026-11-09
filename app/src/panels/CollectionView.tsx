@@ -15,7 +15,8 @@ const text = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivi
 const COMPARE: Record<SortKey, (a: Item, b: Item) => number> = {
   name: (a, b) => text(a.name, b.name) || text(a.set_name, b.set_name),
   set: (a, b) =>
-    text(a.set_name, b.set_name) || (a.number_sort ?? 0) - (b.number_sort ?? 0) || text(a.number, b.number),
+    (a.set_released ?? "").localeCompare(b.set_released ?? "") ||
+    text(a.set_code, b.set_code) || (a.number_sort ?? 0) - (b.number_sort ?? 0) || text(a.number, b.number),
   finish: (a, b) => text(a.finish_label, b.finish_label) || text(a.name, b.name),
   price: (a, b) => (a.usd ?? -1) - (b.usd ?? -1),
   qty: (a, b) => a.qty - b.qty || text(a.name, b.name),

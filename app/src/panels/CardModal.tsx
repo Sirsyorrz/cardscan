@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { api, LANG_LABEL, money, url, type CardDetail } from "../api";
+import { api, LANG_LABEL, money, setLabel, url, type CardDetail } from "../api";
 import { useStore } from "../state";
 
 const hide = (e: React.SyntheticEvent<HTMLImageElement>) => (e.currentTarget.style.visibility = "hidden");
@@ -81,7 +81,7 @@ export default function CardModal({
         ...gameStats,
         ["Rarity", c.rarity],
         ["Number", c.printed_total ? `${c.number} / ${c.printed_total}` : c.number],
-        ["Set", [c.set_name, c.series].filter(Boolean).join(" · ")],
+        ["Set", [setLabel(c), c.series].filter(Boolean).join(" · ")],
         ["Released", c.released],
         ["Artist", c.artist],
       ]
@@ -213,7 +213,7 @@ export default function CardModal({
                     <div
                       key={p.id}
                       className={`opt${p.id === current ? " cur" : ""}`}
-                      title={`${p.set_name} #${p.number}`}
+                      title={`${setLabel(p)} #${p.number}`}
                       onClick={() => p.id !== current && setTrail((t) => [...t, p.id])}
                     >
                       {p.img ? <img loading="lazy" src={p.img} alt="" onError={hide} /> : <div className="noimg" />}

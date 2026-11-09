@@ -180,10 +180,12 @@ def finishes(q):
 
 def items(q):
     text = norm(q.get("q", [""])[0])
-    sort = {"name": "c.name, c.set_code", "recent": "i.added_at DESC", "set": "c.set_code, c.number_sort"}.get(
+    sort = {"name": "c.name, c.set_code", "recent": "i.added_at DESC",
+            "set": "set_released, c.set_code, c.number_sort"}.get(
         q.get("sort", ["recent"])[0], "i.added_at DESC")
     rows = db().execute(
         f"""SELECT i.*, {', '.join('c.' + col for col in CARD_COLS.split(', '))}, c.number_sort,
+                   (SELECT s.released FROM c.sets s WHERE s.id = c.set_id) AS set_released,
                    (SELECT MAX(x.id) FROM scans x WHERE x.card_id = i.card_id AND x.status = 'added') AS capture_id
             FROM items i
             JOIN c.cards c ON c.id = i.card_id

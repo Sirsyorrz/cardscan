@@ -49,6 +49,7 @@ export type Item = Card & {
   qty: number;
   added_at: number;
   number_sort: number | null;
+  set_released: string | null;
   capture_id: number | null;
   usd: number | null;
 };
@@ -151,6 +152,11 @@ const langTag = (lang?: string) => (!lang || lang === "en" ? "" : ` ${lang === "
 
 export function cardLine(c: { set_code: string; number: string; lang?: string } | null) {
   return c ? `${c.set_code} #${c.number}${langTag(c.lang)}` : "";
+}
+
+/** Lorcana's main sets are numbered by release, which players go by more than the names. */
+export function setLabel(c: { game: string; set_code: string; set_name: string }) {
+  return c.game === "lor" && /^\d+$/.test(c.set_code) ? `${c.set_name} (set ${c.set_code})` : c.set_name;
 }
 
 /** Game filter scopes; keys must match GAME_SCOPE in review.py. */
