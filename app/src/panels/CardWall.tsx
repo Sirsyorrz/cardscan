@@ -81,33 +81,41 @@ export default function CardWall({ items, rate, cell, onZoom, onOpen }: Props) {
   const grid = useRef<HTMLDivElement>(null);
   /** Card centres in grid coordinates, untransformed. Grid order means y never decreases. */
   const centers = useRef<{ x: number; y: number }[]>([]);
+  /** Where the grid's origin sits in the scroller's content, and the scroller on screen; both only move on resize. */
+  const origin = useRef({ x: 0, y: 0, left: 0, top: 0 });
+  /** Pointer in client coordinates; null once it leaves. */
   const pointer = useRef<{ x: number; y: number } | null>(null);
-  const touched = useRef(new Set<number>());
+  /** The lens eases toward the pointer and fades in and out, instead of CSS transitions on every card. */
+  const lens = useRef({ x: 0, y: 0, strength: 0, at: 0 });
+  /** What each card was last given, so unchanged cards cost nothing: style writes are what make WebKitGTK lag. */
+  const written = useRef<string[]>([]);
   const frame = useRef(0);
   const shownCell = useRef(cell);
   const [hover, setHover] = useState<number | null>(null);
 
   const measure = () => {
-    const kids = grid.current?.children as HTMLCollectionOf<HTMLElement> | undefined;
-    centers.current = kids
-      ? Array.from(kids, (el) => ({ x: el.offsetLeft + el.offsetWidth / 2, y: el.offsetTop + el.offsetHeight / 2 }))
-      : [];
+    const s = scroller.current;
+    const g = grid.current;
+    if (!s || !g) return;
+    const kids = g.children as HTMLCollectionOf<HTMLElement>;
+    centers.current = Array.from(kids, (el) => ({ x: el.offsetLeft + el.offsetWidth / 2, y: el.offsetTop + el.offsetHeight / 2 }));
+    const r = s.getBoundingClientRect();
+    origin.current = { x: g.offsetLeft - s.offsetLeft, y: g.offsetTop - s.offsetTop, left: r.left, top: r.top };
   };
 
   /** The visible strip of the grid and the pointer, both in grid coordinates. */
   const viewport = () => {
     const s = scroller.current!;
-    const sr = s.getBoundingClientRect();
-    const gr = grid.current!.getBoundingClientRect();
-    const top = sr.top - gr.top;
-    const left = sr.left - gr.left;
+    const o = origin.current;
+    const top = s.scrollTop - o.y;
+    const left = s.scrollLeft - o.x;
     const p = pointer.current;
     return {
       top,
       bottom: top + s.clientHeight,
       left,
       right: left + s.clientWidth,
-      pointer: p && { x: p.x - gr.left, y: p.y - gr.top },
+      pointer: p && { x: p.x - o.left + left, y: p.y - o.top + top },
     };
   };
 
@@ -121,17 +129,29 @@ export default function CardWall({ items, rate, cell, onZoom, onOpen }: Props) {
     return best;
   };
 
-  const paint = () => {
+  const paint = (now = performance.now()) => {
     frame.current = 0;
     const g = grid.current;
     if (!scroller.current || !g) return;
     const { top, bottom, left, right, pointer: p } = viewport();
+
+    const l = lens.current;
+    const ease = 1 - Math.exp(-Math.min(64, now - (l.at || now)) / 45);
+    l.at = now;
+    if (p && l.strength === 0) [l.x, l.y] = [p.x, p.y];
+    else if (p) [l.x, l.y] = [l.x + (p.x - l.x) * ease, l.y + (p.y - l.y) * ease];
+    l.strength += ((p ? 1 : 0) - l.strength) * ease;
+    if (Math.abs(l.strength - (p ? 1 : 0)) < 0.01) l.strength = p ? 1 : 0;
+    const settled = l.strength === (p ? 1 : 0) && (!p || Math.hypot(p.x - l.x, p.y - l.y) < 0.5);
+
     const cs = centers.current;
     const h = cell * RATIO;
     const peak = Math.min(4, Math.max(1.35, HOVER_WIDTH / cell));
     const sigma = (cell + GAP) * 0.75;
+    const reach = (sigma * 3) ** 2;
     const band = Math.min(160, (bottom - top) * 0.25);
     const kids = g.children as HTMLCollectionOf<HTMLElement>;
+    const last = written.current;
 
     let lo = 0;
     let hi = cs.length;
@@ -141,24 +161,26 @@ export default function CardWall({ items, rate, cell, onZoom, onOpen }: Props) {
       else hi = m;
     }
 
-    const seen = new Set<number>();
+    const shown = new Set<number>();
     let near: number | null = null;
     let nearD = Infinity;
     for (let i = lo; i < cs.length && cs[i].y - h / 2 <= bottom; i++) {
       const c = cs[i];
       const el = kids[i];
       if (!el) break;
-      const edge = EDGE_SCALE + (1 - EDGE_SCALE) * smooth(clamp01(Math.min(c.y - top, bottom - c.y) / band));
+      shown.add(i);
+      const fromEdge = Math.min(c.y - top, bottom - c.y);
+      const edge = fromEdge >= band ? 1 : EDGE_SCALE + (1 - EDGE_SCALE) * smooth(clamp01(fromEdge / band));
       let scale = edge;
       let dx = 0;
       let dy = 0;
       let boost = 0;
-      if (p) {
-        const vx = c.x - p.x;
-        const vy = c.y - p.y;
-        const r2 = vx * vx + vy * vy;
-        if (r2 < nearD) [near, nearD] = [i, r2];
-        const w = Math.exp(-r2 / (2 * sigma * sigma));
+      const vx = c.x - l.x;
+      const vy = c.y - l.y;
+      const r2 = vx * vx + vy * vy;
+      if (p && r2 < nearD) [near, nearD] = [i, r2];
+      if (l.strength > 0 && r2 < reach) {
+        const w = Math.exp(-r2 / (2 * sigma * sigma)) * l.strength;
         boost = (peak - 1) * w;
         // the lens overrides the edge shrink, so a hovered card at the edge still reads
         scale = (edge + (1 - edge) * w) * (1 + boost);
@@ -174,24 +196,32 @@ export default function CardWall({ items, rate, cell, onZoom, onOpen }: Props) {
           if (hh * 2 < bottom - top) dy += Math.max(0, top + hh - fy) - Math.max(0, fy + hh - bottom);
         }
       }
-      el.style.transform = `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px) scale(${scale.toFixed(3)})`;
-      el.style.zIndex = boost > 0.01 ? String(1 + Math.round(boost * 100)) : "";
-      seen.add(i);
+      const transform =
+        scale === 1 && !dx && !dy ? "" : `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px) scale(${scale.toFixed(3)})`;
+      const z = boost > 0.01 ? String(1 + Math.round(boost * 100)) : "";
+      if (last[i] !== transform + z) {
+        last[i] = transform + z;
+        el.style.transform = transform;
+        el.style.zIndex = z;
+      }
     }
-    for (const i of touched.current) {
-      if (seen.has(i) || !kids[i]) continue;
-      kids[i].style.transform = "";
-      kids[i].style.zIndex = "";
-    }
-    touched.current = seen;
+    // cards scrolled out of view go back to normal so they don't come back mid-lens
+    last.forEach((v, i) => {
+      if (v && !shown.has(i) && kids[i]) {
+        last[i] = "";
+        kids[i].style.transform = "";
+        kids[i].style.zIndex = "";
+      }
+    });
     setHover(near);
+    if (!settled) schedule();
   };
 
   // the resize and wheel listeners outlive renders, so they go through this to see the current cell size
   const paintRef = useRef(paint);
   paintRef.current = paint;
   const schedule = () => {
-    if (!frame.current) frame.current = requestAnimationFrame(() => paintRef.current());
+    if (!frame.current) frame.current = requestAnimationFrame((t) => paintRef.current(t));
   };
 
   useLayoutEffect(() => {
@@ -209,6 +239,13 @@ export default function CardWall({ items, rate, cell, onZoom, onOpen }: Props) {
       measure();
     }
     shownCell.current = cell;
+    // a reorder or relayout moves every card under its old transform
+    written.current = [];
+    for (const el of grid.current?.children ?? []) {
+      (el as HTMLElement).style.transform = "";
+      (el as HTMLElement).style.zIndex = "";
+    }
+    lens.current.at = 0;
     paint();
   }, [cell, items]);
 
@@ -243,6 +280,7 @@ export default function CardWall({ items, rate, cell, onZoom, onOpen }: Props) {
         ref={scroller}
         className="wall"
         onScroll={schedule}
+        onPointerEnter={() => measure()}
         onPointerMove={(e) => {
           pointer.current = { x: e.clientX, y: e.clientY };
           schedule();
