@@ -12,6 +12,9 @@ export type Card = {
   rarity: string | null;
   img: string | null;
   img_large: string | null;
+  /** The second face of a double-faced Magic card. */
+  img_back: string | null;
+  img_back_large: string | null;
 };
 
 /** A search result: a printing with its lowest TCGplayer price and the copies owned. */
@@ -52,6 +55,15 @@ export type Item = Card & {
   set_released: string | null;
   capture_id: number | null;
   usd: number | null;
+  type_line: string | null;
+  colors: string | null;
+  cmc: number | null;
+  power: string | null;
+  toughness: string | null;
+  hp: number | null;
+  identity: string | null;
+  legal: number | null;
+  text: string | null;
 };
 
 export type Items = { items: Item[]; aud_per_usd: number | null; prices_at: string | null };

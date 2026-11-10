@@ -19,12 +19,13 @@ from urllib.parse import parse_qs, urlparse
 
 import collection
 import exporter
+import filters
 import importer
 import prices
 from collection import norm
 
 PAGE = Path(__file__).resolve().parent / "static" / "review.html"
-CARD_COLS = "id, game, lang, name, local_name, set_code, set_name, number, rarity, image, released"
+CARD_COLS = "id, game, lang, name, local_name, set_code, set_name, number, rarity, image, released, has_back"
 _local = threading.local()
 LIVE = {"path": None}
 GAME_SCOPE = {"lor": "game = 'lor'", "mtg": "game = 'mtg'", "pkm": "game = 'pkm' AND lang = 'en'",
@@ -54,12 +55,23 @@ def image_url(card, size="small"):
     return f"https://assets.tcgdex.net/{image}/{'low' if size == 'small' else 'high'}.webp"
 
 
+def back_url(card, size="small"):
+    """The second face of a transforming or modal double-faced Magic card; None for one-faced cards."""
+    if card["game"] != "mtg" or not card.get("has_back"):
+        return None
+    i = card["id"]
+    return f"https://cards.scryfall.io/{'small' if size == 'small' else 'normal'}/back/{i[0]}/{i[1]}/{i}.jpg"
+
+
 def card_json(row):
     if row is None:
         return None
     c = dict(row)
     c["img"] = image_url(c)
     c["img_large"] = image_url(c, "large")
+    c["img_back"] = back_url(c)
+    c["img_back_large"] = back_url(c, "large")
+    c.pop("has_back", None)
     return c
 
 
@@ -126,19 +138,43 @@ NUMBER_QUERY = re.compile(r"(?:([a-z][a-z0-9]{1,5}?)\s*)?#?(\d{1,4})[a-z]?(?:\s*
 LOR_NUMBER_QUERY = re.compile(r"(\d{1,2})\s*[-#\s]\s*#?(\d{1,3})[a-z]?")
 
 
+def filter_clause(game, q):
+    """The per-game filters (filters.py) from the `f` parameter as a WHERE clause on `c.cards k`, or ""."""
+    f = filters.parse(q.get("f", [""])[0]) if game else filters.parse("")
+    if not filters.active(f):
+        return ""
+    rate = collection.get_meta(db(), "aud_per_usd")
+    rate = float(rate) if rate else None
+    keys = ("game", "colors", "identity", "type_line", "text", "cmc", "power", "toughness", "hp", "rarity",
+            "set_code", "set_name", "legal", "usd")
+    db().create_function("card_ok", len(keys), lambda *v: filters.matches(f, dict(zip(keys, v)), rate),
+                         deterministic=True)
+    # the rules text and price lookups only run when something filters on them
+    text = "(SELECT body FROM c.texts t WHERE t.id = k.text_id)" if any(f["text"]) else "NULL"
+    usd = """COALESCE((SELECT MIN(usd) FROM prices p WHERE p.card_id = k.id AND p.source = 'tcg'),
+                      (SELECT MIN(usd) FROM c.base_prices b WHERE b.card_id = k.id AND b.source = 'tcg'))""" \
+        if "price" in f["ranges"] else "NULL"
+    return f"""card_ok(k.game, k.colors, k.identity, k.type_line, {text}, k.cmc, k.power, k.toughness, k.hp,
+                       k.rarity, k.set_code, k.set_name, k.legal, {usd})"""
+
+
 def search(q):
     """Printings by name, or by set code and collector number ("DLR 44", "dlr044", "44/103"), with their lowest
-    TCGplayer price and the copies owned."""
+    TCGplayer price and the copies owned. With a game picked, the filters in `f` narrow it down, and are enough on
+    their own without a name."""
     text = q.get("q", [""])[0].strip()
     key = norm(text)
-    if len(key) < 2:
-        return []
     game = q.get("game", [""])[0]
     scope = GAME_SCOPE.get(game, "1")
+    clause = filter_clause(game, q)
+    if len(key) < 2 and not clause:
+        return []
+    where_filter = f" AND {clause}" if clause else ""
     rows = []
     if game == "lor" and (m := LOR_NUMBER_QUERY.fullmatch(text)):
         rows = db().execute(
-            f"SELECT {CARD_COLS} FROM c.cards WHERE {scope} AND set_code = ? AND number_sort = ? ORDER BY number",
+            f"""SELECT {CARD_COLS} FROM c.cards k WHERE {scope} AND set_code = ? AND number_sort = ?{where_filter}
+                ORDER BY number""",
             (m[1], int(m[2])),
         ).fetchall()
     elif m := NUMBER_QUERY.fullmatch(text):
@@ -153,14 +189,20 @@ def search(q):
             args.append(int(total))
         if code or total:
             rows = db().execute(
-                f"SELECT {CARD_COLS} FROM c.cards WHERE {' AND '.join(where)} ORDER BY released DESC LIMIT 80", args
+                f"""SELECT {CARD_COLS} FROM c.cards k WHERE {' AND '.join(where)}{where_filter}
+                    ORDER BY released DESC LIMIT 80""", args
             ).fetchall()
-    if not rows:
+    if not rows and len(key) >= 2:
         rows = db().execute(
-            f"""SELECT {CARD_COLS} FROM c.cards
-                WHERE {scope} AND (name_norm LIKE ? OR local_norm LIKE ?)
-                ORDER BY name_norm = ? DESC, name_norm LIKE ? DESC, released DESC LIMIT 80""",
+            f"""SELECT {CARD_COLS} FROM c.cards k
+                WHERE {scope} AND (name_norm LIKE ? OR local_norm LIKE ?){where_filter}
+                ORDER BY name_norm = ? DESC, name_norm LIKE ? DESC, released DESC LIMIT {SEARCH_LIMIT}""",
             (f"%{key}%", f"%{key}%", key, f"{key}%"),
+        ).fetchall()
+    elif not rows and not key:
+        rows = db().execute(
+            f"""SELECT {CARD_COLS} FROM c.cards k WHERE {scope}{where_filter}
+                ORDER BY name_norm, released DESC LIMIT {SEARCH_LIMIT}""",
         ).fetchall()
     ids = [r["id"] for r in rows]
     if not ids:
@@ -174,6 +216,25 @@ def search(q):
     return [{**card_json(r), "usd": lowest.get(r["id"]), "qty": held.get(r["id"], 0)} for r in rows]
 
 
+SEARCH_LIMIT = 150
+_facets = {}
+
+
+def facets(q):
+    """A game's rarities and sets, for the search filters' pickers."""
+    game = q.get("game", [""])[0]
+    if game not in GAME_SCOPE:
+        return {"rarities": [], "sets": []}
+    if game not in _facets:
+        scope = GAME_SCOPE[game]
+        rarities = [r[0] for r in db().execute(
+            f"SELECT rarity FROM c.cards WHERE {scope} AND rarity IS NOT NULL GROUP BY rarity ORDER BY COUNT(*) DESC")]
+        sets = [{"code": r["code"], "name": r["name"]} for r in db().execute(
+            f"SELECT code, name FROM c.sets WHERE {scope} ORDER BY released DESC, name")]
+        _facets[game] = {"rarities": rarities, "sets": sets}
+    return _facets[game]
+
+
 def finishes(q):
     return [{"key": k, "label": l} for k, l in collection.finishes(db(), q["card"][0])]
 
@@ -185,10 +246,12 @@ def items(q):
         q.get("sort", ["recent"])[0], "i.added_at DESC")
     rows = db().execute(
         f"""SELECT i.*, {', '.join('c.' + col for col in CARD_COLS.split(', '))}, c.number_sort,
+                   c.type_line, c.colors, c.cmc, c.power, c.toughness, c.hp, c.identity, c.legal, t.body AS text,
                    (SELECT s.released FROM c.sets s WHERE s.id = c.set_id) AS set_released,
                    (SELECT MAX(x.id) FROM scans x WHERE x.card_id = i.card_id AND x.status = 'added') AS capture_id
             FROM items i
             JOIN c.cards c ON c.id = i.card_id
+            LEFT JOIN c.texts t ON t.id = c.text_id
             WHERE ? = '' OR c.name_norm LIKE ? OR c.local_norm LIKE ? ORDER BY {sort}""",
         (text, f"%{text}%", f"%{text}%"),
     ).fetchall()
@@ -340,8 +403,8 @@ def rate(_q):
 
 
 GET = {"/api/rate": rate, "/api/sessions": sessions, "/api/scans": scans, "/api/options": options, "/api/search": search,
-       "/api/finishes": finishes, "/api/items": items, "/api/card": card_detail, "/api/sets": binder_sets,
-       "/api/binder": binder, "/api/imports": lambda _q: importer.history(db())}
+       "/api/finishes": finishes, "/api/items": items, "/api/facets": facets, "/api/card": card_detail,
+       "/api/sets": binder_sets, "/api/binder": binder, "/api/imports": lambda _q: importer.history(db())}
 
 
 def post_scan(scan_id, body):

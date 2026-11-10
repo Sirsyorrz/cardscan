@@ -58,6 +58,7 @@ export default function CardModal({
   const capture = d?.scans.length ? url(`/capture/${d.scans[0].id}`) : null;
   // new sets often have no card image yet; the scan is the next best picture
   const art = shown ?? (broken ? capture : c?.img_large) ?? null;
+  const back = !shown && !broken ? c?.img_back_large : null;
   type Stat = [string, string | number | null | undefined];
   // cards.db keeps Lorcana's lore in `hp` and strength / willpower in power / toughness
   const gameStats: Stat[] = !c
@@ -111,7 +112,10 @@ export default function CardModal({
             <div className="cm-body">
               <div className="cm-art">
                 {art ? (
-                  <img src={art} alt="" onError={(e) => (shown || broken ? hide(e) : setBroken(true))} />
+                  <div className="cm-faces">
+                    <img src={art} alt="" onError={(e) => (shown || broken ? hide(e) : setBroken(true))} />
+                    {back && <img src={back} alt="" onError={hide} />}
+                  </div>
                 ) : (
                   <div className="noimg dim">No image</div>
                 )}

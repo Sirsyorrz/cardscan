@@ -1,5 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cardLine, money, url, type Item } from "../api";
+import FlipButton from "./FlipButton";
 
 export const ZOOM_MIN = 48;
 export const ZOOM_MAX = 320;
@@ -14,9 +15,10 @@ const EDGE_SCALE = 0.55;
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 const smooth = (t: number) => t * t * (3 - 2 * t);
 
-function WallImage({ item, large }: { item: Item; large: boolean }) {
-  const capture = item.capture_id ? url(`/capture/${item.capture_id}`) : null;
-  const [src, setSrc] = useState((large ? item.img_large : item.img) ?? capture);
+function WallImage({ item, large, turned }: { item: Item; large: boolean; turned: boolean }) {
+  const capture = item.capture_id && !turned ? url(`/capture/${item.capture_id}`) : null;
+  const face = turned ? (large ? item.img_back_large : item.img_back) : large ? item.img_large : item.img;
+  const [src, setSrc] = useState(face ?? capture);
   if (!src) return <div className="noimg" />;
   return (
     <img
@@ -55,11 +57,14 @@ const WallCard = memo(function WallCard({
   onOpen: (cardId: string) => void;
 }) {
   const large = cell > 200;
+  const [turned, setTurned] = useState(false);
+  const big = turned ? item.img_back_large : item.img_large;
   return (
     <div className="wall-card" style={{ width: cell, height: cell * RATIO }} onClick={() => onOpen(item.card_id)}>
-      <WallImage key={large ? "l" : "s"} item={item} large={large} />
-      {hires && !large && item.img_large && <HiRes src={item.img_large} />}
+      <WallImage key={`${large}${turned}`} item={item} large={large} turned={turned} />
+      {hires && !large && big && <HiRes key={big} src={big} />}
       {item.qty > 1 && cell >= 64 && <span className="wall-qty">×{item.qty}</span>}
+      {item.img_back && cell >= 64 && <FlipButton className="small" onFlip={() => setTurned((t) => !t)} />}
     </div>
   );
 });

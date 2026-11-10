@@ -849,3 +849,124 @@ tr.clickable {
 .binder-h {
   padding: var(--sp-4) 0 var(--sp-2);
 }
+
+/* Per-game filters */
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.f-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+.f-label {
+  color: var(--fg-faint);
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.f-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.f-field.grow input {
+  flex: 1;
+  min-width: 120px;
+}
+.f-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.f-chips button {
+  padding: 3px 9px;
+  font-size: var(--fs-sm);
+}
+.f-colour {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.f-colour i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.4);
+}
+.f-colour:not(.on) i {
+  opacity: 0.55;
+}
+.f-range {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.f-range .f-label {
+  margin-right: var(--sp-1);
+}
+.f-range input {
+  width: 64px;
+}
+
+/* Double-faced cards */
+.flip-btn {
+  position: absolute;
+  z-index: 1;
+  top: 34%;
+  right: 9%;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid rgb(255 255 255 / 0.75);
+  background: rgb(15 20 28 / 0.6);
+  color: #fff;
+  backdrop-filter: blur(2px);
+  opacity: 0.85;
+  transition: opacity 0.15s, transform 0.15s;
+}
+.flip-btn:hover:not(:disabled) {
+  opacity: 1;
+  transform: scale(1.08);
+  border-color: #fff;
+}
+.flip-btn svg {
+  width: 60%;
+  height: 60%;
+  fill: currentColor;
+}
+.flip-btn.small {
+  top: 30%;
+  right: 7%;
+  width: 26px;
+  height: 26px;
+  border-width: 1.5px;
+  opacity: 0.75;
+}
+.cm-faces {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.tile-art {
+  position: relative;
+  margin-bottom: var(--sp-1);
+  /* keeps the flip button's z-index under the card popup */
+  isolation: isolate;
+}
+.found .tile-art img,
+.found .tile-art .noimg {
+  margin-bottom: 0;
+}

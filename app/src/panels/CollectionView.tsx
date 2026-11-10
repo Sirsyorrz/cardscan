@@ -5,6 +5,8 @@ import { api, cardLine, gameOf, money, url, type Item, type Items } from "../api
 import { useStore } from "../state";
 import CardModal from "./CardModal";
 import CardWall, { clampZoom, ZOOM_MAX, ZOOM_MIN } from "./CardWall";
+import { matcher, sortRarities } from "../filters";
+import FilterPanel, { FilterButton, useGameFilters } from "./FilterPanel";
 import GameSelect from "./GameSelect";
 import ImportModal from "./ImportModal";
 
@@ -73,6 +75,7 @@ export default function CollectionView() {
   const [opened, setOpened] = useState<string | null>(null);
   const [game, setGame] = useState("");
   const [importing, setImporting] = useState(false);
+  const { filters, setFilters, open: filtersOpen, toggle: toggleFilters, count: filterCount } = useGameFilters(game);
 
   const load = useCallback(
     () => api<Items>(`/api/items?q=${encodeURIComponent(q)}`).then(setData),
@@ -122,12 +125,27 @@ export default function CollectionView() {
     load();
   };
 
+  const ofGame = useMemo(() => (data?.items ?? []).filter((r) => !game || gameOf(r) === game), [data, game]);
+
+  const choices = useMemo(() => {
+    const sets = new Map<string, string>();
+    const finishes = new Map<string, string>();
+    for (const r of ofGame) {
+      sets.set(r.set_code, r.set_name);
+      finishes.set(r.finish, r.finish_label);
+    }
+    return {
+      rarities: sortRarities(game, ofGame.map((r) => r.rarity ?? "")),
+      sets: [...sets].map(([code, name]) => ({ code, name })).sort((a, b) => text(a.name, b.name)),
+      finishes: [...finishes].map(([key, label]) => ({ key, label })),
+    };
+  }, [ofGame, game]);
+
   const rows = useMemo(() => {
     const cmp = COMPARE[sort.key];
-    return (data?.items ?? [])
-      .filter((r) => !game || gameOf(r) === game)
-      .sort((a, b) => (sort.desc ? cmp(b, a) : cmp(a, b)));
-  }, [data, sort, game]);
+    const keep = filters ? matcher(filters, data?.aud_per_usd ?? null) : () => true;
+    return ofGame.filter(keep).sort((a, b) => (sort.desc ? cmp(b, a) : cmp(a, b)));
+  }, [ofGame, sort, filters, data]);
 
   const perGame = (key: string) =>
     (data?.items ?? []).reduce((n, r) => (!key || gameOf(r) === key ? n + r.qty : n), 0);
@@ -151,6 +169,7 @@ export default function CollectionView() {
       <div className="toolbar">
         <input className="grow" placeholder="Filter by name" value={q} onChange={(e) => setQ(e.target.value)} />
         <GameSelect value={game} onChange={setGame} count={perGame} />
+        {filters && <FilterButton open={filtersOpen} count={filterCount} onClick={toggleFilters} />}
         <button disabled={refreshing} onClick={refresh}>
           {refreshing ? "Refreshing" : "Refresh prices"}
         </button>
@@ -169,6 +188,17 @@ export default function CollectionView() {
           </button>
         </div>
       </div>
+      {filters && filtersOpen && (
+        <FilterPanel
+          game={game}
+          value={filters}
+          onChange={setFilters}
+          rarities={choices.rarities}
+          sets={choices.sets}
+          finishes={choices.finishes}
+          currency={data?.aud_per_usd ? "A$" : "US$"}
+        />
+      )}
       {layout === "wall" && (
         <div className="toolbar">
           <div className="seg">

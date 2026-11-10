@@ -14,6 +14,9 @@ streamed in as a virtual webcam (see [Camera](#camera)).
 - Lorcana, Magic, Pokémon and Japanese Pokémon, including showcase and alternate art printings
 - A finish toggle for foils, reverse holos and holos while scanning
 - Review page for unsure reads, a collection with TCGplayer prices in AUD, card search and set binders
+- Per-game filters on the collection and search, Scryfall advanced search style: colours or ink or energy type,
+  type line, rules text, mana value and other stats, rarity, set, format legality and price
+- Double-faced Magic cards turn over with the button on the card
 - Imports collections from ManaBox, Moxfield, Deckbox and TCGplayer CSVs, and exports its own
 - Built-in updater
 

@@ -3,6 +3,7 @@ import { api, GAME_LABEL, gameOf as scopeOf, money, url, type Binder, type Binde
 import { useStore } from "../state";
 import CardModal from "./CardModal";
 import GameSelect from "./GameSelect";
+import TileArt from "./TileArt";
 
 const text = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
 const progressOf = (s: BinderSet) => (s.base ? s.owned / s.base : 0);
@@ -59,19 +60,8 @@ function buildBinder(cards: BinderCard[]) {
   return { slots: [...slots.values()], extras };
 }
 
-/** The card image, or your own scan of it while there's none online yet (new sets, before TCGplayer has photos). */
 function CardImage({ card }: { card: BinderCard }) {
-  const capture = card.capture_id ? url(`/capture/${card.capture_id}`) : null;
-  const [src, setSrc] = useState(card.img ?? capture);
-  if (!src) return <div className="noimg" />;
-  return (
-    <img
-      loading="lazy"
-      src={src}
-      alt=""
-      onError={(e) => (capture && src !== capture ? setSrc(capture) : (e.currentTarget.style.visibility = "hidden"))}
-    />
-  );
+  return <TileArt card={card} capture={card.capture_id ? url(`/capture/${card.capture_id}`) : null} />;
 }
 
 function Progress({ value, done }: { value: number; done: boolean }) {
