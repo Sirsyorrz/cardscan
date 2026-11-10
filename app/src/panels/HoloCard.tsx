@@ -4,24 +4,6 @@ import FlipButton from "./FlipButton";
 
 const hide = (e: React.SyntheticEvent<HTMLImageElement>) => (e.currentTarget.style.visibility = "hidden");
 
-function Face({
-  src,
-  className,
-  onError,
-}: {
-  src: string;
-  className: string;
-  onError: React.ReactEventHandler<HTMLImageElement>;
-}) {
-  return (
-    <div className={`holo-face ${className}`}>
-      <img src={src} alt="" draggable={false} onError={onError} />
-      <div className="holo-shine" />
-      <div className="holo-glare" />
-    </div>
-  );
-}
-
 /** The popup's card: tilts toward the pointer and spins when dragged, lit with the foil of `fx`. A double-faced card
  *  turns to its other face, anything else to the game's card back. */
 export default function HoloCard({
@@ -52,10 +34,19 @@ export default function HoloCard({
 
   return (
     <div className="cm-holo">
-      <div ref={ref} className="holo" data-fx={fx} style={{ "--win": win } as React.CSSProperties}>
+      <div
+        ref={ref}
+        className={back ? "holo" : "holo plain-back"}
+        data-fx={fx}
+        style={{ "--win": win } as React.CSSProperties}
+      >
         <div className="holo-tilt">
-          <Face src={front} className="front" onError={onFrontError ?? hide} />
-          <Face src={back ?? cardBack} className={back ? "back" : "back plain"} onError={hide} />
+          <div className="holo-face">
+            <img className="front" src={front} alt="" draggable={false} onError={onFrontError ?? hide} />
+            <img className="back" src={back ?? cardBack} alt="" draggable={false} onError={hide} />
+            <div className="holo-shine" />
+            <div className="holo-glare" />
+          </div>
         </div>
         {back && <FlipButton onFlip={() => holo.current?.turnOver()} />}
       </div>

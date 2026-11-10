@@ -40,6 +40,8 @@ const rad = (deg: number) => (deg * Math.PI) / 180;
 /** Wires the tilt, spin and light to a `.holo` element. Returns the controls and the cleanup. */
 export function attachHolo(el: HTMLElement) {
   const tilt = el.querySelector<HTMLElement>(".holo-tilt")!;
+  // Firefox doesn't decode an image while it's hidden, so the far face would turn into view blank
+  const decodeFaces = () => el.querySelectorAll("img").forEach((img) => img.decode().catch(() => {}));
   // rotation now, where it's heading, and how fast; y includes the turns
   const at = { x: 0, y: 0, vx: 0, vy: 0 };
   const to = { x: 0, y: 0 };
@@ -47,6 +49,7 @@ export function attachHolo(el: HTMLElement) {
   let drag: { id: number; x: number; y: number; from: number; last: number; t: number; speed: number } | null = null;
   let frame = 0;
   let last = 0;
+  let showingBack = false;
 
   const step = (now: number) => {
     frame = 0;
@@ -74,6 +77,9 @@ export function attachHolo(el: HTMLElement) {
     el.style.setProperty("--mxb", `${(100 - mx).toFixed(1)}%`);
     el.style.setProperty("--my", `${my.toFixed(1)}%`);
     el.style.setProperty("--o", clamp(Math.hypot(sy, sx) * 3.5, 0, 1).toFixed(3));
+    // past edge-on the face shows the back image (see .holo.turned in the CSS)
+    const back = Math.cos(rad(at.y)) * Math.cos(rad(at.x)) < 0;
+    if (back !== showingBack) el.classList.toggle("turned", (showingBack = back));
     const moving = Math.abs(to.x - at.x) + Math.abs(to.y - at.y) + Math.abs(at.vx) + Math.abs(at.vy) > 0.02;
     if (moving || drag) frame = requestAnimationFrame(step);
     else last = 0;
@@ -133,9 +139,12 @@ export function attachHolo(el: HTMLElement) {
     ["pointerup", up],
     ["pointercancel", up],
     ["pointerleave", leave],
+    // otherwise the browser drags the image out instead of the card turning
+    ["dragstart", (e) => e.preventDefault()],
   ];
   on.forEach(([type, fn]) => el.addEventListener(type, fn as EventListener));
   step(performance.now());
+  decodeFaces();
 
   return {
     turnOver() {
@@ -146,6 +155,7 @@ export function attachHolo(el: HTMLElement) {
     },
     reset() {
       base = to.x = to.y = at.x = at.y = at.vx = at.vy = 0;
+      decodeFaces();
       step(performance.now());
     },
     destroy() {

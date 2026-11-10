@@ -972,21 +972,30 @@ tr.clickable {
 }
 .holo-tilt {
   position: relative;
-  transform-style: preserve-3d;
 }
 .holo-face {
   position: relative;
   border-radius: var(--radius);
   overflow: hidden;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
   background: var(--panel-2);
   box-shadow: 0 14px 34px rgb(0 0 0 / 0.5);
 }
-.holo-face.back {
+/* one face that swaps to the back image as it passes edge-on, mirrored so it reads the right way round; two
+   back-to-back faces with backface-visibility paint wrong in Firefox while the card turns */
+.holo-face img.back {
   position: absolute;
   inset: 0;
-  transform: rotateY(180deg);
+  height: 100%;
+  transform: scaleX(-1);
+  visibility: hidden;
+}
+.holo.turned .holo-face img.back {
+  visibility: visible;
+}
+.holo.turned .holo-face img.front {
+  visibility: hidden;
+}
+.holo.turned .holo-face {
   --mx: var(--mxb);
 }
 .holo-face img {
@@ -1019,7 +1028,7 @@ tr.clickable {
   background-position: var(--mx) var(--my);
   mix-blend-mode: color-dodge;
 }
-.holo-face.plain .holo-shine {
+.holo.turned.plain-back .holo-shine {
   display: none !important;
 }
 /* Magic and Lorcana foil: a rainbow band across the whole card that slides with the light */
