@@ -933,7 +933,6 @@ tr.clickable {
   border: 2px solid rgb(255 255 255 / 0.75);
   background: rgb(15 20 28 / 0.6);
   color: #fff;
-  backdrop-filter: blur(2px);
   opacity: 0.85;
   transition: opacity 0.15s, transform 0.15s;
 }
@@ -955,10 +954,191 @@ tr.clickable {
   border-width: 1.5px;
   opacity: 0.75;
 }
-.cm-faces {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
+.holo {
+  --mx: 50%;
+  --my: 50%;
+  --mxb: 50%;
+  --o: 0;
+  --radius: 4.6% / 3.3%;
+  --win: 50% 14.2% / 85% 40%;
+  position: relative;
+  perspective: 1000px;
+  /* dragging spins the card, on a phone too; the info beside it still scrolls the popup */
+  touch-action: none;
+  cursor: grab;
+}
+.holo.dragging {
+  cursor: grabbing;
+}
+.holo-tilt {
+  position: relative;
+  transform-style: preserve-3d;
+}
+.holo-face {
+  position: relative;
+  border-radius: var(--radius);
+  overflow: hidden;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  background: var(--panel-2);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 0.5);
+}
+.holo-face.back {
+  position: absolute;
+  inset: 0;
+  transform: rotateY(180deg);
+  --mx: var(--mxb);
+}
+.holo-face img {
+  width: 100%;
+  aspect-ratio: 63 / 88;
+  object-fit: cover;
+  display: block;
+  border-radius: 0;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.holo-shine,
+.holo-glare {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.holo-glare {
+  background: radial-gradient(
+    farthest-corner circle at var(--mx) var(--my),
+    rgb(255 255 255 / 0.7) 0%,
+    rgb(255 255 255 / 0.2) 25%,
+    rgb(0 0 0 / 0.35) 100%
+  );
+  mix-blend-mode: overlay;
+  opacity: calc(var(--o) * 0.8);
+}
+.holo-shine {
+  display: none;
+  background-position: var(--mx) var(--my);
+  mix-blend-mode: color-dodge;
+}
+.holo-face.plain .holo-shine {
+  display: none !important;
+}
+/* Magic and Lorcana foil: a rainbow band across the whole card that slides with the light */
+.holo[data-fx="foil"] .holo-shine {
+  display: block;
+  background-image: linear-gradient(
+    115deg,
+    transparent 20%,
+    hsl(185 80% 45%) 33%,
+    hsl(275 80% 50%) 41%,
+    hsl(330 80% 50%) 48%,
+    hsl(45 80% 45%) 56%,
+    hsl(130 80% 45%) 64%,
+    transparent 78%
+  );
+  background-size: 300% 300%;
+  opacity: calc(0.25 + var(--o) * 0.5);
+}
+/* etched foil: a duller metallic band */
+.holo[data-fx="etched"] .holo-shine {
+  display: block;
+  background-image: linear-gradient(
+    110deg,
+    transparent 25%,
+    rgb(255 255 255 / 0.9) 45%,
+    rgb(190 205 230 / 0.7) 52%,
+    transparent 72%
+  );
+  background-size: 300% 300%;
+  mix-blend-mode: soft-light;
+  opacity: calc(0.3 + var(--o) * 0.6);
+}
+/* Pokémon holo: rainbow bars over crossed light lines, like the printed pattern */
+.holo[data-fx="holo"] .holo-shine,
+.holo[data-fx="full"] .holo-shine {
+  display: block;
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      hsl(0 75% 45%) 0%,
+      hsl(55 75% 42%) 5%,
+      hsl(120 75% 40%) 10%,
+      hsl(185 75% 42%) 15%,
+      hsl(245 75% 50%) 20%,
+      hsl(300 75% 45%) 25%,
+      hsl(360 75% 45%) 30%
+    ),
+    repeating-linear-gradient(
+      125deg,
+      #000 0%,
+      #444 3.8%,
+      #666 4.5%,
+      #444 5.2%,
+      #000 10%,
+      #000 12%
+    );
+  background-size:
+    200% 700%,
+    300% 100%;
+  background-position:
+    0 var(--my),
+    var(--mx) var(--my);
+  background-blend-mode: screen;
+  opacity: calc(0.3 + var(--o) * 0.55);
+}
+.holo[data-fx="holo"] .holo-shine {
+  -webkit-mask: linear-gradient(#000 0 0) var(--win) no-repeat;
+  mask: linear-gradient(#000 0 0) var(--win) no-repeat;
+}
+/* full art and secret rares: softer, across the whole card */
+.holo[data-fx="full"] .holo-shine {
+  opacity: calc(0.2 + var(--o) * 0.4);
+}
+/* reverse holo: a sparkly sheen on everything but the art window */
+.holo[data-fx="reverse"] .holo-shine {
+  display: block;
+  background-image:
+    radial-gradient(circle at 20% 30%, rgb(255 255 255 / 0.9) 0 1px, transparent 2px),
+    radial-gradient(circle at 70% 80%, rgb(255 255 255 / 0.7) 0 1px, transparent 2px),
+    linear-gradient(
+      115deg,
+      transparent 15%,
+      hsl(185 80% 45%) 32%,
+      hsl(275 80% 50%) 42%,
+      hsl(45 80% 45%) 54%,
+      hsl(130 80% 45%) 64%,
+      transparent 82%
+    );
+  background-size:
+    9px 11px,
+    13px 7px,
+    300% 300%;
+  background-position:
+    0 0,
+    0 0,
+    var(--mx) var(--my);
+  opacity: calc(0.25 + var(--o) * 0.55);
+  -webkit-mask:
+    linear-gradient(#000 0 0),
+    linear-gradient(#000 0 0) var(--win) no-repeat;
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0),
+    linear-gradient(#000 0 0) var(--win) no-repeat;
+  mask-composite: exclude;
+}
+.holo > .flip-btn {
+  z-index: 2;
+}
+.holo-hint {
+  margin-top: var(--sp-2);
+  text-align: center;
+  font-size: var(--fs-sm);
+}
+tr.picked td {
+  background: var(--row-sel);
+}
+tr.picked td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .tile-art {
   position: relative;

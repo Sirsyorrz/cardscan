@@ -16,7 +16,9 @@ streamed in as a virtual webcam (see [Camera](#camera)).
 - Review page for unsure reads, a collection with TCGplayer prices in AUD, card search and set binders
 - Per-game filters on the collection and search, Scryfall advanced search style: colours or ink or energy type,
   type line, rules text, mana value and other stats, rarity, set, format legality and price
-- Double-faced Magic cards turn over with the button on the card
+- The card popup tilts the card toward the pointer with a glare and a foil, holo or reverse holo sheen for the
+  finish (click a finish in the price table to switch). Drag it to spin it round to the back: the other face of a
+  double-faced Magic card (which also has a turn-over button), otherwise the game's card back
 - Imports collections from ManaBox, Moxfield, Deckbox and TCGplayer CSVs, and exports its own
 - Built-in updater
 

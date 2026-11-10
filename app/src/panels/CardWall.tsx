@@ -54,13 +54,13 @@ const WallCard = memo(function WallCard({
   item: Item;
   cell: number;
   hires: boolean;
-  onOpen: (cardId: string) => void;
+  onOpen: (cardId: string, finish: string) => void;
 }) {
   const large = cell > 200;
   const [turned, setTurned] = useState(false);
   const big = turned ? item.img_back_large : item.img_large;
   return (
-    <div className="wall-card" style={{ width: cell, height: cell * RATIO }} onClick={() => onOpen(item.card_id)}>
+    <div className="wall-card" style={{ width: cell, height: cell * RATIO }} onClick={() => onOpen(item.card_id, item.finish)}>
       <WallImage key={`${large}${turned}`} item={item} large={large} turned={turned} />
       {hires && !large && big && <HiRes key={big} src={big} />}
       {item.qty > 1 && cell >= 64 && <span className="wall-qty">×{item.qty}</span>}
@@ -74,7 +74,7 @@ type Props = {
   rate: number | null;
   cell: number;
   onZoom: (update: (cell: number) => number) => void;
-  onOpen: (cardId: string) => void;
+  onOpen: (cardId: string, finish: string) => void;
 };
 
 /**

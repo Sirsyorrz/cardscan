@@ -72,7 +72,7 @@ export default function CollectionView() {
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "added", desc: true });
   const [data, setData] = useState<Items | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [opened, setOpened] = useState<string | null>(null);
+  const [opened, setOpened] = useState<{ id: string; finish: string } | null>(null);
   const [game, setGame] = useState("");
   const [importing, setImporting] = useState(false);
   const { filters, setFilters, open: filtersOpen, toggle: toggleFilters, count: filterCount } = useGameFilters(game);
@@ -237,7 +237,7 @@ export default function CollectionView() {
       </div>
       {layout === "wall" ? (
         <>
-          <CardWall items={rows} rate={rate} cell={zoom} onZoom={onZoom} onOpen={setOpened} />
+          <CardWall items={rows} rate={rate} cell={zoom} onZoom={onZoom} onOpen={(id, finish) => setOpened({ id, finish })} />
           {data && !rows.length && (
             <div className="empty dim">{q || game ? "No matches." : "Nothing in the collection yet."}</div>
           )}
@@ -261,7 +261,7 @@ export default function CollectionView() {
                 <tr
                   key={`${r.card_id}|${r.finish}|${r.condition}`}
                   className="clickable"
-                  onClick={() => setOpened(r.card_id)}
+                  onClick={() => setOpened({ id: r.card_id, finish: r.finish })}
                 >
                   <td>
                     <Thumb item={r} />
@@ -296,7 +296,7 @@ export default function CollectionView() {
         </div>
       )}
       {importing && <ImportModal onClose={() => setImporting(false)} onImported={load} />}
-      {opened && <CardModal id={opened} onClose={() => setOpened(null)} onChanged={load} />}
+      {opened && <CardModal id={opened.id} finish={opened.finish} onClose={() => setOpened(null)} onChanged={load} />}
     </div>
   );
 }

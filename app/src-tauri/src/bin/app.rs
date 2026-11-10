@@ -206,13 +206,9 @@ fn job_run(app: AppHandle, state: State<'_, App>, job: String) -> Result<(), Str
 }
 
 fn main() {
-    // WebKitGTK's DMA-BUF renderer hard-crashes with a Wayland protocol error on
-    // NVIDIA. Must be set before GTK initialises.
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
-
+    // WEBKIT_DISABLE_DMABUF_RENDERER=1 used to be forced here for a Wayland protocol crash on NVIDIA, but it
+    // drops WebKitGTK to a software path where the popup's 3D card runs at ~5 fps; with WebKitGTK 2.54 and
+    // driver 615 the crash is gone. Set it by hand if it comes back.
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())

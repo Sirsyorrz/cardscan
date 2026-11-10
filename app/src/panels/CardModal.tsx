@@ -1,16 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { api, LANG_LABEL, money, setLabel, url, type CardDetail } from "../api";
+import { artWindow, backFile, effectFor } from "../holo";
 import { useStore } from "../state";
+import HoloCard from "./HoloCard";
 
 const hide = (e: React.SyntheticEvent<HTMLImageElement>) => (e.currentTarget.style.visibility = "hidden");
 
 export default function CardModal({
   id,
+  finish,
   onClose,
   onChanged,
 }: {
   id: string;
+  /** The finish to show the card in, when it was opened from a copy of it. */
+  finish?: string;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -21,6 +26,7 @@ export default function CardModal({
   const [d, setD] = useState<CardDetail | null>(null);
   const [shown, setShown] = useState<string | null>(null);
   const [broken, setBroken] = useState(false);
+  const [picked, setPicked] = useState<string | null>(finish ?? null);
 
   const load = useCallback(
     () =>
@@ -33,6 +39,7 @@ export default function CardModal({
   useEffect(() => {
     setShown(null);
     setBroken(false);
+    if (current !== id) setPicked(null);
     load();
   }, [load]);
 
@@ -58,7 +65,7 @@ export default function CardModal({
   const capture = d?.scans.length ? url(`/capture/${d.scans[0].id}`) : null;
   // new sets often have no card image yet; the scan is the next best picture
   const art = shown ?? (broken ? capture : c?.img_large) ?? null;
-  const back = !shown && !broken ? c?.img_back_large : null;
+  const shownFinish = d && (picked ?? d.finishes.find((f) => f.qty > 0)?.key ?? d.finishes[0]?.key);
   type Stat = [string, string | number | null | undefined];
   // cards.db keeps Lorcana's lore in `hp` and strength / willpower in power / toughness
   const gameStats: Stat[] = !c
@@ -111,11 +118,17 @@ export default function CardModal({
             </div>
             <div className="cm-body">
               <div className="cm-art">
-                {art ? (
-                  <div className="cm-faces">
-                    <img src={art} alt="" onError={(e) => (shown || broken ? hide(e) : setBroken(true))} />
-                    {back && <img src={back} alt="" onError={hide} />}
-                  </div>
+                {art && !shown && !broken ? (
+                  <HoloCard
+                    front={art}
+                    back={c.img_back_large}
+                    cardBack={`/backs/${backFile(c.game, c.lang)}`}
+                    fx={effectFor(c.game, shownFinish, c.rarity)}
+                    win={artWindow(c.released)}
+                    onFrontError={() => setBroken(true)}
+                  />
+                ) : art ? (
+                  <img src={art} alt="" onError={hide} />
                 ) : (
                   <div className="noimg dim">No image</div>
                 )}
@@ -149,11 +162,16 @@ export default function CardModal({
                   </thead>
                   <tbody>
                     {d.finishes.map((f) => (
-                      <tr key={f.key}>
+                      <tr
+                        key={f.key}
+                        className={`clickable${f.key === shownFinish ? " picked" : ""}`}
+                        title="Show the card in this finish"
+                        onClick={() => setPicked(f.key)}
+                      >
                         <td>{f.label}</td>
                         <td className="num">{money(f.tcg, rate) || <span className="dim">-</span>}</td>
                         {hasCk && <td className="num">{money(f.ck, rate) || <span className="dim">-</span>}</td>}
-                        <td className="num qty">
+                        <td className="num qty" onClick={(e) => e.stopPropagation()}>
                           <button disabled={!f.qty} onClick={() => adjust(f.key, -1)}>
                             −
                           </button>
