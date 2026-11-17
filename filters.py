@@ -91,7 +91,7 @@ def active(f):
 
 def matches(f, card, rate=None):
     """card: a dict with game, colors, identity, type_line, text, cmc, power, toughness, hp, rarity, set_code,
-    set_name, legal and usd (the lowest TCGplayer price). Price ranges are in the shown currency: AUD at `rate`."""
+    set_name, legal and usd (the lowest price, Card Kingdom over TCGplayer). Price ranges are in the shown currency: AUD at `rate`."""
     game = card["game"]
     if f["colors"]:
         if f["mode"] == "identity":

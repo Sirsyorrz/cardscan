@@ -19,12 +19,10 @@ COLUMNS = ["Card ID", "Game", "Language", "Name", "Set code", "Set name", "Colle
 
 def rows(db):
     return db.execute(
-        """SELECT i.card_id, c.game, c.lang, c.name, c.set_code, c.set_name, c.number, i.finish, i.condition, i.qty,
-                  i.added_at, COALESCE(p.usd, b.usd) AS usd
+        f"""SELECT i.card_id, c.game, c.lang, c.name, c.set_code, c.set_name, c.number, i.finish, i.condition, i.qty,
+                  i.added_at, {collection.price_sql("i.card_id", "i.finish")} AS usd
            FROM items i
            JOIN c.cards c ON c.id = i.card_id
-           LEFT JOIN prices p ON p.card_id = i.card_id AND p.finish = i.finish AND p.source = 'tcg'
-           LEFT JOIN c.base_prices b ON b.card_id = i.card_id AND b.finish = i.finish AND b.source = 'tcg'
            ORDER BY i.added_at, c.name""").fetchall()
 
 

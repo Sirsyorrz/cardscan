@@ -30,7 +30,7 @@ export default function Settings({ onClose }: { onClose: () => void }) {
         <div className="setrow">
           <div>
             Refresh prices
-            <div className="dim">TCGplayer prices for everything in the collection, and the US$ to A$ rate.</div>
+            <div className="dim">Card Kingdom and TCGplayer prices for everything in the collection, and the US$ to A$ rate.</div>
           </div>
           <button onClick={() => run("prices", "Refreshing prices")}>Refresh</button>
         </div>

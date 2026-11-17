@@ -13,7 +13,7 @@ streamed in as a virtual webcam (see [Camera](#camera)).
 - Identifies each card as it lands, from its name, set code and collector number, with GPU OCR
 - Lorcana, Magic, Pokémon and Japanese Pokémon, including showcase and alternate art printings
 - A finish toggle for foils, reverse holos and holos while scanning
-- Review page for unsure reads, a collection with TCGplayer prices in AUD, card search and set binders
+- Review page for unsure reads, a collection with Card Kingdom / TCGplayer prices in AUD, card search and set binders
 - Per-game filters on the collection and search, Scryfall advanced search style: colours or ink or energy type,
   type line, rules text, mana value and other stats, rarity, set, format legality and price
 - The card popup tilts the card toward the pointer with a glare and a foil, holo or reverse holo sheen for the
@@ -145,7 +145,8 @@ The collection only lives in `data/collection.db`, so back it up.
   set the finish, mark it not a card, or add more copies (arrows to move, Enter to add, X to reject, / to search).
   New captures appear while a scan is running, and Delete session drops a session with the cards it added.
 - Collection lists what you own with prices, +/- per row, sortable columns and a price refresh. Click a card for its
-  prices, stats and other printings. Prices are TCGplayer market prices converted to AUD.
+  prices, stats and other printings. Prices are Card Kingdom retail where CK has the card
+  (Magic), else TCGplayer market, converted to AUD.
 - Import (on Collection) adds a CSV exported from ManaBox, Moxfield, Deckbox, TCGplayer or any app with name, set and
   collector number columns. It shows what matched and what didn't before adding anything, and an import can be
   undone later. ManaBox exports match by Scryfall id; others by set and number, checked against the name.

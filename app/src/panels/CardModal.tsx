@@ -60,7 +60,7 @@ export default function CardModal({
   const c = d?.card;
   const rate = d?.aud_per_usd ?? null;
   const owned = d ? d.finishes.reduce((n, f) => n + f.qty, 0) : 0;
-  const value = d ? d.finishes.reduce((n, f) => n + (f.tcg ?? 0) * f.qty, 0) : 0;
+  const value = d ? d.finishes.reduce((n, f) => n + (f.ck ?? f.tcg ?? 0) * f.qty, 0) : 0;
   const hasCk = d?.finishes.some((f) => f.ck != null) ?? false;
   const capture = d?.scans.length ? url(`/capture/${d.scans[0].id}`) : null;
   // new sets often have no card image yet; the scan is the next best picture
@@ -155,8 +155,8 @@ export default function CardModal({
                   <thead>
                     <tr>
                       <th>Finish</th>
-                      <th className="num">TCGplayer</th>
                       {hasCk && <th className="num">Card Kingdom</th>}
+                      <th className="num">TCGplayer</th>
                       <th className="num">Owned</th>
                     </tr>
                   </thead>
@@ -169,8 +169,8 @@ export default function CardModal({
                         onClick={() => setPicked(f.key)}
                       >
                         <td>{f.label}</td>
-                        <td className="num">{money(f.tcg, rate) || <span className="dim">-</span>}</td>
                         {hasCk && <td className="num">{money(f.ck, rate) || <span className="dim">-</span>}</td>}
+                        <td className="num">{money(f.tcg, rate) || <span className="dim">-</span>}</td>
                         <td className="num qty" onClick={(e) => e.stopPropagation()}>
                           <button disabled={!f.qty} onClick={() => adjust(f.key, -1)}>
                             −

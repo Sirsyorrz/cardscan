@@ -93,6 +93,23 @@ LABELS = {"nonfoil": "Normal", "foil": "Foil", "etched": "Etched foil", "normal"
           "reverse": "Reverse holo"}
 
 
+# Card Kingdom first (its prices track what cards actually sell for better), TCGplayer when CK has none
+PRICE_SOURCES = ("ck", "tcg")
+
+
+def price_sql(card, finish):
+    """SQL for the USD price of `card` in `finish` (both SQL expressions): refreshed over the cards.db snapshot,
+    Card Kingdom over TCGplayer."""
+    return "COALESCE(" + ", ".join(
+        f"(SELECT usd FROM {table} WHERE card_id = {card} AND finish = {finish} AND source = '{source}')"
+        for source in PRICE_SOURCES for table in ("prices", "c.base_prices")) + ")"
+
+
+def pick_price(by_source):
+    """The price to show from {source: usd}."""
+    return next((by_source[s] for s in PRICE_SOURCES if by_source.get(s) is not None), None)
+
+
 def now():
     return int(time.time() * 1000)
 

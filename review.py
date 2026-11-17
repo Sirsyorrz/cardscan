@@ -82,13 +82,18 @@ def get_card(card_id):
 
 
 def price(card_id, finish):
-    """TCGplayer market price in USD: a refreshed one when there is one, else the snapshot in cards.db."""
-    for sql in ("SELECT usd FROM prices WHERE card_id = ? AND finish = ? AND source = 'tcg'",
-                "SELECT usd FROM c.base_prices WHERE card_id = ? AND finish = ? AND source = 'tcg'"):
-        row = db().execute(sql, (card_id, finish)).fetchone()
-        if row:
-            return row[0]
-    return None
+    """USD price of one finish: Card Kingdom, else TCGplayer; refreshed over the cards.db snapshot."""
+    return collection.pick_price(price_map([card_id]).get((card_id, finish), {}))
+
+
+def lowest_prices(ids):
+    """{card_id: the lowest price of any of its finishes}."""
+    lowest = {}
+    for (cid, _), v in price_map(ids).items():
+        usd = collection.pick_price(v)
+        if usd is not None:
+            lowest[cid] = min(lowest.get(cid, usd), usd)
+    return lowest
 
 
 def sessions(_q):
@@ -151,8 +156,9 @@ def filter_clause(game, q):
                          deterministic=True)
     # the rules text and price lookups only run when something filters on them
     text = "(SELECT body FROM c.texts t WHERE t.id = k.text_id)" if any(f["text"]) else "NULL"
-    usd = """COALESCE((SELECT MIN(usd) FROM prices p WHERE p.card_id = k.id AND p.source = 'tcg'),
-                      (SELECT MIN(usd) FROM c.base_prices b WHERE b.card_id = k.id AND b.source = 'tcg'))""" \
+    usd = f"""(SELECT MIN({collection.price_sql('f.card_id', 'f.finish')}) FROM (
+                  SELECT card_id, finish FROM prices WHERE card_id = k.id
+                  UNION SELECT card_id, finish FROM c.base_prices WHERE card_id = k.id) f)""" \
         if "price" in f["ranges"] else "NULL"
     return f"""card_ok(k.game, k.colors, k.identity, k.type_line, {text}, k.cmc, k.power, k.toughness, k.hp,
                        k.rarity, k.set_code, k.set_name, k.legal, {usd})"""
@@ -160,7 +166,7 @@ def filter_clause(game, q):
 
 def search(q):
     """Printings by name, or by set code and collector number ("DLR 44", "dlr044", "44/103"), with their lowest
-    TCGplayer price and the copies owned. With a game picked, the filters in `f` narrow it down, and are enough on
+    price and the copies owned. With a game picked, the filters in `f` narrow it down, and are enough on
     their own without a name."""
     text = q.get("q", [""])[0].strip()
     key = norm(text)
@@ -209,10 +215,7 @@ def search(q):
         return []
     marks = ",".join("?" * len(ids))
     held = dict(db().execute(f"SELECT card_id, SUM(qty) FROM items WHERE card_id IN ({marks}) GROUP BY card_id", ids))
-    lowest = {}
-    for (cid, _), v in price_map(ids).items():
-        if v.get("tcg") is not None:
-            lowest[cid] = min(lowest.get(cid, v["tcg"]), v["tcg"])
+    lowest = lowest_prices(ids)
     return [{**card_json(r), "usd": lowest.get(r["id"]), "qty": held.get(r["id"], 0)} for r in rows]
 
 
@@ -282,7 +285,7 @@ def legality(game, bits):
 
 
 def price_map(ids):
-    """{(card_id, finish): {"tcg": usd, "ck": usd}}: refreshed TCGplayer prices over the cards.db snapshot."""
+    """{(card_id, finish): {"tcg": usd, "ck": usd}}: refreshed prices over the cards.db snapshot."""
     out = {}
     marks = ",".join("?" * len(ids))
     for sql in (f"SELECT card_id, finish, source, usd FROM c.base_prices WHERE card_id IN ({marks})",
@@ -336,13 +339,12 @@ def card_detail(q):
     ids = [r["id"] for r in rows]
     held = dict(db().execute(f"SELECT card_id, SUM(qty) FROM items WHERE card_id IN ({','.join('?' * len(ids))}) GROUP BY card_id",
                              ids).fetchall()) if ids else {}
-    all_prices = price_map(ids) if ids else {}
+    lowest = lowest_prices(ids) if ids else {}
     printings = []
     for r in rows:
         p = card_json(r)
         p["qty"] = held.get(r["id"], 0)
-        tcg = [v["tcg"] for (cid, _), v in all_prices.items() if cid == r["id"] and "tcg" in v]
-        p["usd"] = min(tcg) if tcg else None
+        p["usd"] = lowest.get(r["id"])
         printings.append(p)
     for k in ("name_norm", "local_norm", "text_id", "play_id", "tcg_group", "slot", "number_sort"):
         card.pop(k, None)
@@ -365,7 +367,7 @@ def binder_sets(q):
 
 
 def binder(q):
-    """One set's printings in number order with the copies owned, lowest TCGplayer price and binder slot."""
+    """One set's printings in number order with the copies owned, lowest price and binder slot."""
     set_id = q["id"][0]
     info = db().execute("SELECT * FROM c.sets WHERE id = ?", (set_id,)).fetchone()
     if info is None:
@@ -382,9 +384,7 @@ def binder(q):
         captures = dict(db().execute(
             f"""SELECT card_id, MAX(id) FROM scans WHERE card_id IN ({marks}) AND status = 'added'
                 GROUP BY card_id""", ids).fetchall())
-        for (cid, _), v in price_map(ids).items():
-            if v.get("tcg") is not None:
-                lowest[cid] = min(lowest.get(cid, v["tcg"]), v["tcg"])
+        lowest = lowest_prices(ids)
     rate = collection.get_meta(db(), "aud_per_usd")
     return {"set": dict(info), "aud_per_usd": float(rate) if rate else None,
             "cards": [{**card_json(r), "qty": held.get(r["id"], 0), "usd": lowest.get(r["id"]),

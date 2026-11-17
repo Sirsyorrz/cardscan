@@ -17,7 +17,7 @@ export type Card = {
   img_back_large: string | null;
 };
 
-/** A search result: a printing with its lowest TCGplayer price and the copies owned. */
+/** A search result: a printing with its lowest price and the copies owned. */
 export type Found = Card & { usd: number | null; qty: number };
 
 export type Session = {
