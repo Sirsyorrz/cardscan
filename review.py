@@ -150,7 +150,7 @@ def filter_clause(game, q):
         return ""
     rate = collection.get_meta(db(), "aud_per_usd")
     rate = float(rate) if rate else None
-    keys = ("game", "colors", "identity", "type_line", "text", "cmc", "power", "toughness", "hp", "rarity",
+    keys = ("game", "colors", "identity", "type_line", "text", "artist", "cmc", "power", "toughness", "hp", "rarity",
             "set_code", "set_name", "legal", "usd")
     db().create_function("card_ok", len(keys), lambda *v: filters.matches(f, dict(zip(keys, v)), rate),
                          deterministic=True)
@@ -160,7 +160,7 @@ def filter_clause(game, q):
                   SELECT card_id, finish FROM prices WHERE card_id = k.id
                   UNION SELECT card_id, finish FROM c.base_prices WHERE card_id = k.id) f)""" \
         if "price" in f["ranges"] else "NULL"
-    return f"""card_ok(k.game, k.colors, k.identity, k.type_line, {text}, k.cmc, k.power, k.toughness, k.hp,
+    return f"""card_ok(k.game, k.colors, k.identity, k.type_line, {text}, k.artist, k.cmc, k.power, k.toughness, k.hp,
                        k.rarity, k.set_code, k.set_name, k.legal, {usd})"""
 
 
@@ -249,7 +249,7 @@ def items(q):
         q.get("sort", ["recent"])[0], "i.added_at DESC")
     rows = db().execute(
         f"""SELECT i.*, {', '.join('c.' + col for col in CARD_COLS.split(', '))}, c.number_sort,
-                   c.type_line, c.colors, c.cmc, c.power, c.toughness, c.hp, c.identity, c.legal, t.body AS text,
+                   c.type_line, c.colors, c.cmc, c.power, c.toughness, c.hp, c.identity, c.legal, c.artist, t.body AS text,
                    (SELECT s.released FROM c.sets s WHERE s.id = c.set_id) AS set_released,
                    (SELECT MAX(x.id) FROM scans x WHERE x.card_id = i.card_id AND x.status = 'added') AS capture_id
             FROM items i

@@ -10,6 +10,7 @@ export type Filters = {
   colorMode: ColorMode;
   type: string;
   text: string;
+  artist: string;
   rarity: string[];
   set: string;
   format: string;
@@ -23,6 +24,7 @@ export const NO_FILTERS: Filters = {
   colorMode: "any",
   type: "",
   text: "",
+  artist: "",
   rarity: [],
   set: "",
   format: "",
@@ -37,6 +39,7 @@ export type Filterable = {
   identity?: string | null;
   type_line?: string | null;
   text?: string | null;
+  artist?: string | null;
   cmc?: number | null;
   power?: string | null;
   toughness?: string | null;
@@ -202,6 +205,7 @@ export function activeCount(f: Filters) {
     (f.colors.length ? 1 : 0) +
     (terms(f.type).inc.length || terms(f.type).exc.length ? 1 : 0) +
     (terms(f.text).inc.length || terms(f.text).exc.length ? 1 : 0) +
+    (terms(f.artist).inc.length || terms(f.artist).exc.length ? 1 : 0) +
     (f.rarity.length ? 1 : 0) +
     (f.set.trim() ? 1 : 0) +
     (f.format ? 1 : 0) +
@@ -215,6 +219,7 @@ export function matcher(f: Filters, rate: number | null) {
   const want = new Set(f.colors);
   const type = terms(f.type);
   const text = terms(f.text);
+  const artist = terms(f.artist);
   const rarity = new Set(f.rarity);
   const set = fold(f.set).trim();
   const ranges = Object.entries(f.ranges).filter(([, r]) => isRangeSet(r)) as [RangeKey, Range][];
@@ -226,6 +231,7 @@ export function matcher(f: Filters, rate: number | null) {
     }
     if ((type.inc.length || type.exc.length) && !hasTerms(c.type_line, type)) return false;
     if ((text.inc.length || text.exc.length) && !hasTerms(c.text, text)) return false;
+    if ((artist.inc.length || artist.exc.length) && !hasTerms(c.artist, artist)) return false;
     if (rarity.size && !rarity.has(c.rarity ?? "")) return false;
     if (set && fold(c.set_code) !== set && !fold(c.set_name).includes(set)) return false;
     if (f.format) {

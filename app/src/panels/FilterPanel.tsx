@@ -28,7 +28,7 @@ export function useGameFilters(game: string) {
 
 export function FilterButton({ open, count, onClick }: { open: boolean; count: number; onClick: () => void }) {
   return (
-    <button className={open || count ? "on" : ""} onClick={onClick} title="Colours, type, text, stats, rarity, set">
+    <button className={open || count ? "on" : ""} onClick={onClick} title="Colours, type, text, artist, stats, rarity, set">
       Filters{count ? ` (${count})` : ""}
     </button>
   );
@@ -87,6 +87,10 @@ export default function FilterPanel({ game, value: f, onChange, rarities, sets, 
         <label className="f-field grow">
           <span className="f-label">Text</span>
           <input value={f.text} placeholder={g.textHint} onChange={(e) => set({ text: e.target.value })} />
+        </label>
+        <label className="f-field">
+          <span className="f-label">Artist</span>
+          <input value={f.artist} placeholder="Artist name" onChange={(e) => set({ artist: e.target.value })} />
         </label>
         <label className="f-field">
           <span className="f-label">Set</span>

@@ -1,4 +1,4 @@
-"""Per-game card filters (colours, type, rules text, stats, rarity, set, format, price) for search.
+"""Per-game card filters (colours, type, rules text, artist, stats, rarity, set, format, price) for search.
 
 Must match app/src/filters.ts, which applies the same filters to the collection in the app, and its port in
 fakehams' site/collections/cards.js.
@@ -72,6 +72,7 @@ def parse(text):
         "mode": f.get("colorMode") or "any",
         "type": terms(f.get("type")),
         "text": terms(f.get("text")),
+        "artist": terms(f.get("artist")),
         "rarity": set(f.get("rarity") or []),
         "set": fold(f.get("set") or "").strip(),
         "format": f.get("format") or "",
@@ -85,12 +86,12 @@ def parse(text):
 
 
 def active(f):
-    return bool(f["colors"] or any(f["type"]) or any(f["text"]) or f["rarity"] or f["set"] or f["format"]
+    return bool(f["colors"] or any(f["type"]) or any(f["text"]) or any(f["artist"]) or f["rarity"] or f["set"] or f["format"]
                 or f["ranges"])
 
 
 def matches(f, card, rate=None):
-    """card: a dict with game, colors, identity, type_line, text, cmc, power, toughness, hp, rarity, set_code,
+    """card: a dict with game, colors, identity, type_line, text, artist, cmc, power, toughness, hp, rarity, set_code,
     set_name, legal and usd (the lowest price, Card Kingdom over TCGplayer). Price ranges are in the shown currency: AUD at `rate`."""
     game = card["game"]
     if f["colors"]:
@@ -102,6 +103,8 @@ def matches(f, card, rate=None):
     if any(f["type"]) and not has_terms(card.get("type_line"), *f["type"]):
         return False
     if any(f["text"]) and not has_terms(card.get("text"), *f["text"]):
+        return False
+    if any(f["artist"]) and not has_terms(card.get("artist"), *f["artist"]):
         return False
     if f["rarity"] and card.get("rarity") not in f["rarity"]:
         return False

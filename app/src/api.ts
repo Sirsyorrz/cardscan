@@ -63,6 +63,7 @@ export type Item = Card & {
   hp: number | null;
   identity: string | null;
   legal: number | null;
+  artist: string | null;
   text: string | null;
 };
 
