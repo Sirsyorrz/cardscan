@@ -28,8 +28,9 @@ export function useGameFilters(game: string) {
 
 export function FilterButton({ open, count, onClick }: { open: boolean; count: number; onClick: () => void }) {
   return (
-    <button className={open || count ? "on" : ""} onClick={onClick} title="Colours, type, text, artist, stats, rarity, set">
-      Filters{count ? ` (${count})` : ""}
+    <button className={open || count ? "on" : ""} onClick={onClick} title="Show or hide the filters (hiding keeps them on)">
+      {open ? "Hide filters" : "Filters"}
+      {count ? ` (${count})` : ""} {open ? "▴" : "▾"}
     </button>
   );
 }
